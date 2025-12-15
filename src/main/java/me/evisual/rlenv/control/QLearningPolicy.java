@@ -111,7 +111,7 @@ public class QLearningPolicy implements Policy {
     }
 
     private String toStateKey(Observation observation) {
-        double[] f = observation.features();
+        double[] f = observation.getFeatures();
         StringBuilder sb = new StringBuilder(f.length * 3);
         for (int i = 0; i < f.length; i++) {
             int bin = quantizeToBin(f[i], 5);
