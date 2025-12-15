@@ -1,0 +1,16 @@
+name: RLEnvPlugin
+main: me.evisual.rlenv.RLEnvPlugin
+version: 1.0.0-DEVELOPMENT
+api-version: '1.20'
+author: Evisual
+
+commands:
+  rlenv:
+    description: Control the RL environment
+    usage: /rlenv <start|stop|status>
+    permission: rlenv.use
+
+permissions:
+  rlenv.use:
+    description: Allows the use of /rlenv commands.
+    default: true
