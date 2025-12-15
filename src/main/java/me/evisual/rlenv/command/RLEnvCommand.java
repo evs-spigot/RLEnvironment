@@ -45,6 +45,10 @@ public class RLEnvCommand implements CommandExecutor {
                 handleSpeed(sender, args);
                 return true;
             }
+            case "graph" -> {
+                handleGraph(sender);
+                return true;
+            }
             default -> {
                 sendUsage(sender);
                 return true;
@@ -65,6 +69,22 @@ public class RLEnvCommand implements CommandExecutor {
 
         plugin.startEnvironment(player);
         sender.sendMessage(ChatColor.GREEN + "RL environment started.");
+    }
+
+    private void handleGraph(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can toggle graphs.");
+            return;
+        }
+
+        if (!plugin.isEnvironmentRunning()) {
+            sender.sendMessage(ChatColor.RED + "Environment is not running.");
+            return;
+        }
+
+        boolean newState = plugin.toggleGraphFor(player);
+        sender.sendMessage(ChatColor.GREEN + "Graph display is now " +
+                (newState ? "enabled." : "disabled."));
     }
 
     private void handleStop(CommandSender sender) {

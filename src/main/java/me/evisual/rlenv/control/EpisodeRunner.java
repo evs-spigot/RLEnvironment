@@ -7,6 +7,7 @@ import me.evisual.rlenv.env.StepResult;
 import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
 import me.evisual.rlenv.logging.TransitionLogger;
 import me.evisual.rlenv.visual.AgentVisualizer;
+import me.evisual.rlenv.visual.ProgressGraphVisualizer;
 import org.bukkit.scheduler.BukkitRunnable;
 
 public class EpisodeRunner extends BukkitRunnable {
@@ -15,6 +16,8 @@ public class EpisodeRunner extends BukkitRunnable {
     private final TransitionLogger logger;
     private final Policy policy;
     private final AgentVisualizer visualizer;
+    private final ProgressGraphVisualizer graph;
+    private final int graphSampleEveryEpisodes = 5;
 
     private Observation currentObservation;
     private boolean closed = false;
@@ -29,14 +32,21 @@ public class EpisodeRunner extends BukkitRunnable {
     private double currentEpisodeReward = 0.0;
     private int stepsThisEpisode = 0;
 
+    private final double[] rewardWindow = new double[50]; // last 50 episodes
+    private int rewardWindowSize = 0;
+    private int rewardWindowIndex = 0;
+    private double rewardWindowSum = 0.0;
+
     public EpisodeRunner(RLEnvironment environment,
                          TransitionLogger logger,
                          Policy policy,
-                         AgentVisualizer visualizer) {
+                         AgentVisualizer visualizer,
+                         ProgressGraphVisualizer graph) {
         this.environment = environment;
         this.logger = logger;
         this.policy = policy;
         this.visualizer = visualizer;
+        this.graph = graph;
 
         this.currentObservation = environment.reset();
         this.currentEpisodeReward = 0.0;
@@ -105,10 +115,26 @@ public class EpisodeRunner extends BukkitRunnable {
         episodesCompleted++;
         totalRewardSum += currentEpisodeReward;
 
-        if (lastStep.getReward() > 0) {
-            successCount++;
+        if (lastStep.getReward() > 0) successCount++;
+        else failureCount++;
+
+        // Sliding window average
+        if (rewardWindowSize < rewardWindow.length) {
+            rewardWindow[rewardWindowIndex] = currentEpisodeReward;
+            rewardWindowSum += currentEpisodeReward;
+            rewardWindowSize++;
+            rewardWindowIndex = (rewardWindowIndex + 1) % rewardWindow.length;
         } else {
-            failureCount++;
+            double old = rewardWindow[rewardWindowIndex];
+            rewardWindow[rewardWindowIndex] = currentEpisodeReward;
+            rewardWindowSum += currentEpisodeReward - old;
+            rewardWindowIndex = (rewardWindowIndex + 1) % rewardWindow.length;
+        }
+
+        double movingAvg = rewardWindowSum / Math.max(1, rewardWindowSize);
+
+        if (graph != null && (episodesCompleted % graphSampleEveryEpisodes == 0)) {
+            graph.addAvgRewardPoint(movingAvg);
         }
     }
 

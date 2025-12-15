@@ -8,6 +8,8 @@ import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
 import me.evisual.rlenv.logging.TransitionLogger;
 import me.evisual.rlenv.visual.AgentVisualizer;
 import me.evisual.rlenv.visual.ArenaVisualizer;
+import me.evisual.rlenv.visual.ProgressGraphVisualizer;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -19,6 +21,8 @@ public class RLEnvPlugin extends JavaPlugin {
     private EpisodeRunner episodeRunner;
     private TransitionLogger transitionLogger;
     private RLEnvironment environment;
+    private ProgressGraphVisualizer graphVisualizer;
+    private boolean graphEnabled = true;
 
     @Override
     public void onEnable() {
@@ -73,12 +77,25 @@ public class RLEnvPlugin extends JavaPlugin {
         File dataFolder = getDataFolder();
         transitionLogger = new TransitionLogger(dataFolder);
 
-//        Policy policy = new RandomPolicy();
-        Policy policy = new QLearningPolicy();
+        Policy policy = new QLearningPolicy(); // or RandomPolicy if you prefer
         AgentVisualizer visualizer = new AgentVisualizer(world, arenaConfig.y());
+        Location graphOrigin = new Location(
+                arenaConfig.world(),
+                arenaConfig.maxX() + 2.0,
+                arenaConfig.y() + 2.0,
+                arenaConfig.minZ() + 0.0
+        );
 
-        episodeRunner = new EpisodeRunner(environment, transitionLogger, policy, visualizer);
-        // 1 tick period; speed is controlled via stepsPerTick within the runner
+        graphVisualizer = new ProgressGraphVisualizer(player, graphOrigin);
+        graphVisualizer.runTaskTimer(this, 0L, 10L); // redraw graph every 40 ticks
+
+        episodeRunner = new EpisodeRunner(
+                environment,
+                transitionLogger,
+                policy,
+                visualizer,
+                graphVisualizer
+        );
         episodeRunner.runTaskTimer(this, 0L, 1L);
 
         getLogger().info("RL environment started at arena centered on " + player.getName());
@@ -93,6 +110,11 @@ public class RLEnvPlugin extends JavaPlugin {
         if (transitionLogger != null) {
             transitionLogger.close();
             transitionLogger = null;
+        }
+
+        if (graphVisualizer != null) {
+            graphVisualizer.cancel();
+            graphVisualizer = null;
         }
 
         environment = null;
@@ -121,5 +143,14 @@ public class RLEnvPlugin extends JavaPlugin {
         ArenaConfig config = env.getConfig();
         ArenaVisualizer.showOutline(player, config);
         player.sendMessage("Showing arena outline.");
+    }
+
+    public boolean toggleGraphFor(Player viewer) {
+        if (graphVisualizer == null) {
+            return false;
+        }
+        boolean newState = !graphVisualizer.isEnabled();
+        graphVisualizer.setEnabled(newState);
+        return newState;
     }
 }
