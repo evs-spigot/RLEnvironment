@@ -9,8 +9,6 @@ import me.evisual.rlenv.logging.TransitionLogger;
 import me.evisual.rlenv.visual.AgentVisualizer;
 import org.bukkit.scheduler.BukkitRunnable;
 
-import java.util.Random;
-
 public class EpisodeRunner extends BukkitRunnable {
 
     private final RLEnvironment environment;
@@ -20,6 +18,16 @@ public class EpisodeRunner extends BukkitRunnable {
 
     private Observation currentObservation;
     private boolean closed = false;
+
+    private int stepsPerTick = 1;
+
+    private long episodesCompleted = 0;
+    private long successCount = 0;
+    private long failureCount = 0;
+    private double totalRewardSum = 0.0;
+
+    private double currentEpisodeReward = 0.0;
+    private int stepsThisEpisode = 0;
 
     public EpisodeRunner(RLEnvironment environment,
                          TransitionLogger logger,
@@ -31,6 +39,8 @@ public class EpisodeRunner extends BukkitRunnable {
         this.visualizer = visualizer;
 
         this.currentObservation = environment.reset();
+        this.currentEpisodeReward = 0.0;
+        this.stepsThisEpisode = 0;
         updateVisualizer();
     }
 
@@ -45,25 +55,60 @@ public class EpisodeRunner extends BukkitRunnable {
             currentObservation = environment.getObservation();
         }
 
-        Action action = policy.chooseAction(currentObservation);
-        StepResult result = environment.step(action);
+        int maxSteps = Math.max(1, stepsPerTick);
 
-        logger.logTransition(
-                currentObservation,
-                action,
-                result.getReward(),
-                result.getObservation(),
-                result.isDone()
-        );
+        for (int i = 0; i < maxSteps; i++) {
+            if (closed) {
+                break;
+            }
 
-        updateVisualizer();
+            Action action = policy.chooseAction(currentObservation);
+            StepResult result = environment.step(action);
 
-        if (result.isDone()) {
-            policy.onEpisodeEnd();
-            currentObservation = environment.reset();
-            updateVisualizer();
-        } else {
+            currentEpisodeReward += result.getReward();
+            stepsThisEpisode++;
+
+            logger.logTransition(
+                    currentObservation,
+                    action,
+                    result.getReward(),
+                    result.getObservation(),
+                    result.isDone()
+            );
+
+            // NEW: let the policy learn from this transition
+            policy.observeTransition(
+                    currentObservation,
+                    action,
+                    result.getReward(),
+                    result.getObservation(),
+                    result.isDone()
+            );
+
             currentObservation = result.getObservation();
+            updateVisualizer();
+
+            if (result.isDone()) {
+                finishEpisode(result);
+                policy.onEpisodeEnd();
+
+                currentObservation = environment.reset();
+                currentEpisodeReward = 0.0;
+                stepsThisEpisode = 0;
+                updateVisualizer();
+                break;
+            }
+        }
+    }
+
+    private void finishEpisode(StepResult lastStep) {
+        episodesCompleted++;
+        totalRewardSum += currentEpisodeReward;
+
+        if (lastStep.getReward() > 0) {
+            successCount++;
+        } else {
+            failureCount++;
         }
     }
 
@@ -83,5 +128,28 @@ public class EpisodeRunner extends BukkitRunnable {
         if (visualizer != null) {
             visualizer.destroy();
         }
+    }
+
+    public void setStepsPerTick(int stepsPerTick) {
+        if (stepsPerTick < 1) {
+            this.stepsPerTick = 1;
+        } else if (stepsPerTick > 50) {
+            this.stepsPerTick = 50;
+        } else {
+            this.stepsPerTick = stepsPerTick;
+        }
+    }
+
+    public EpisodeStats snapshotStats() {
+        double avgReward = episodesCompleted > 0
+                ? totalRewardSum / episodesCompleted
+                : 0.0;
+        return new EpisodeStats(
+                episodesCompleted,
+                successCount,
+                failureCount,
+                avgReward,
+                stepsPerTick
+        );
     }
 }

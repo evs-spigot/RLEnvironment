@@ -14,4 +14,6 @@ public class RandomPolicy implements Policy
         Action[] actions = Action.values();
         return actions[random.nextInt(actions.length)];
     }
+
+    // observeTransition and onEpisodeEnd use default no-op implementations
 }

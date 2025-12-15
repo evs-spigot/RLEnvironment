@@ -1,14 +1,13 @@
 package me.evisual.rlenv;
 
 import me.evisual.rlenv.command.RLEnvCommand;
-import me.evisual.rlenv.control.EpisodeRunner;
-import me.evisual.rlenv.control.Policy;
-import me.evisual.rlenv.control.RandomPolicy;
+import me.evisual.rlenv.control.*;
 import me.evisual.rlenv.env.RLEnvironment;
 import me.evisual.rlenv.env.goldcollector.ArenaConfig;
 import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
 import me.evisual.rlenv.logging.TransitionLogger;
 import me.evisual.rlenv.visual.AgentVisualizer;
+import me.evisual.rlenv.visual.ArenaVisualizer;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -51,7 +50,7 @@ public class RLEnvPlugin extends JavaPlugin {
 
         int centerX = player.getLocation().getBlockX();
         int centerZ = player.getLocation().getBlockZ();
-        int y = player.getLocation().getBlockY();
+        int y = player.getLocation().getBlockY() + 1; // spawn agent on top of ground
 
         int halfSize = 5;
         int minX = centerX - halfSize;
@@ -74,11 +73,13 @@ public class RLEnvPlugin extends JavaPlugin {
         File dataFolder = getDataFolder();
         transitionLogger = new TransitionLogger(dataFolder);
 
-        Policy policy = new RandomPolicy();
+//        Policy policy = new RandomPolicy();
+        Policy policy = new QLearningPolicy();
         AgentVisualizer visualizer = new AgentVisualizer(world, arenaConfig.y());
 
         episodeRunner = new EpisodeRunner(environment, transitionLogger, policy, visualizer);
-        episodeRunner.runTaskTimer(this, 0L, 2L);
+        // 1 tick period; speed is controlled via stepsPerTick within the runner
+        episodeRunner.runTaskTimer(this, 0L, 1L);
 
         getLogger().info("RL environment started at arena centered on " + player.getName());
     }
@@ -95,5 +96,30 @@ public class RLEnvPlugin extends JavaPlugin {
         }
 
         environment = null;
+    }
+
+    public boolean setEnvironmentSpeed(int stepsPerTick) {
+        if (episodeRunner == null) {
+            return false;
+        }
+        episodeRunner.setStepsPerTick(stepsPerTick);
+        return true;
+    }
+
+    public EpisodeStats getEpisodeStats() {
+        if (episodeRunner == null) {
+            return null;
+        }
+        return episodeRunner.snapshotStats();
+    }
+
+    public void showArena(Player player) {
+        if (!(environment instanceof GoldCollectorEnvironment env)) {
+            player.sendMessage("No GoldCollector environment is active.");
+            return;
+        }
+        ArenaConfig config = env.getConfig();
+        ArenaVisualizer.showOutline(player, config);
+        player.sendMessage("Showing arena outline.");
     }
 }
