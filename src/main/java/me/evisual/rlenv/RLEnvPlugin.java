@@ -8,14 +8,15 @@ import me.evisual.rlenv.env.RLEnvironment;
 import me.evisual.rlenv.env.goldcollector.ArenaConfig;
 import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
 import me.evisual.rlenv.logging.TransitionLogger;
+import me.evisual.rlenv.visual.AgentVisualizer;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
 
-public class RLEnvPlugin extends JavaPlugin
-{
+public class RLEnvPlugin extends JavaPlugin {
+
     private EpisodeRunner episodeRunner;
     private TransitionLogger transitionLogger;
     private RLEnvironment environment;
@@ -25,11 +26,9 @@ public class RLEnvPlugin extends JavaPlugin
         if (getCommand("rlenv") != null) {
             getCommand("rlenv").setExecutor(new RLEnvCommand(this));
         }
-
         if (!getDataFolder().exists()) {
             getDataFolder().mkdirs();
         }
-
         getLogger().info("RLEnvPlugin enabled");
     }
 
@@ -54,7 +53,7 @@ public class RLEnvPlugin extends JavaPlugin
         int centerZ = player.getLocation().getBlockZ();
         int y = player.getLocation().getBlockY();
 
-        int halfSize = 5; // arena will be 11x11
+        int halfSize = 5;
         int minX = centerX - halfSize;
         int maxX = centerX + halfSize;
         int minZ = centerZ - halfSize;
@@ -76,9 +75,10 @@ public class RLEnvPlugin extends JavaPlugin
         transitionLogger = new TransitionLogger(dataFolder);
 
         Policy policy = new RandomPolicy();
+        AgentVisualizer visualizer = new AgentVisualizer(world, arenaConfig.y());
 
-        episodeRunner = new EpisodeRunner(environment, transitionLogger, policy);
-        episodeRunner.runTaskTimer(this, 0L, 2L); // step every 2 ticks
+        episodeRunner = new EpisodeRunner(environment, transitionLogger, policy, visualizer);
+        episodeRunner.runTaskTimer(this, 0L, 2L);
 
         getLogger().info("RL environment started at arena centered on " + player.getName());
     }
