@@ -31,8 +31,8 @@ import java.util.Set;
  *   - -10.0 on stepping into a hazard.
  *   - -0.01 per step otherwise (small step cost).
  */
-public class GoldCollectorEnvironment implements RLEnvironment
-{
+public class GoldCollectorEnvironment implements RLEnvironment {
+
     private enum Direction {
         NORTH, SOUTH, EAST, WEST
     }
@@ -90,6 +90,9 @@ public class GoldCollectorEnvironment implements RLEnvironment
             return new StepResult(buildObservation(), 0.0, true);
         }
 
+        // Distance before moving (for shaping)
+        int prevDist = manhattanDistance(agentX, agentZ, goalX, goalZ);
+
         int newX = agentX;
         int newZ = agentZ;
 
@@ -98,8 +101,8 @@ public class GoldCollectorEnvironment implements RLEnvironment
             case MOVE_SOUTH -> newZ += 1;
             case MOVE_EAST -> newX += 1;
             case MOVE_WEST -> newX -= 1;
-            case STAY -> {}
-            default -> {}
+            case STAY -> { }
+            default -> { }
         }
 
         newX = LocationUtil.clamp(newX, config.minX(), config.maxX());
@@ -108,8 +111,10 @@ public class GoldCollectorEnvironment implements RLEnvironment
         agentX = newX;
         agentZ = newZ;
 
-        double reward;
+        int newDist = manhattanDistance(agentX, agentZ, goalX, goalZ);
+
         boolean terminal = false;
+        double reward;
 
         if (isGoalTile(agentX, agentZ)) {
             reward = 10.0;
@@ -118,7 +123,12 @@ public class GoldCollectorEnvironment implements RLEnvironment
             reward = -10.0;
             terminal = true;
         } else {
+            // small step cost so shorter paths are preferred
             reward = -0.01;
+
+            // ✅ reward shaping: moving closer is good, moving away is bad
+            if (newDist < prevDist) reward += 0.20;
+            else if (newDist > prevDist) reward -= 0.20;
         }
 
         steps++;
@@ -127,8 +137,7 @@ public class GoldCollectorEnvironment implements RLEnvironment
         }
 
         done = terminal;
-        Observation obs = buildObservation();
-        return new StepResult(obs, reward, terminal);
+        return new StepResult(buildObservation(), reward, terminal);
     }
 
     @Override
@@ -141,18 +150,25 @@ public class GoldCollectorEnvironment implements RLEnvironment
         return buildObservation();
     }
 
+    /**
+     * New observation format (compact + directional):
+     * 0: dxSign (-1,0,1)
+     * 1: dzSign (-1,0,1)
+     * 2: normalized manhattan distance to goal (0..~1)
+     * 3..6: blocked (N,S,E,W) {0,1}
+     * 7..10: hazard adjacent (N,S,E,W) {0,1}
+     */
     private Observation buildObservation() {
-        double agentNormX = (agentX - config.minX()) / (double) (arenaWidth - 1);
-        double agentNormZ = (agentZ - config.minZ()) / (double) (arenaLength - 1);
+        int dxSign = Integer.compare(goalX, agentX); // -1,0,1
+        int dzSign = Integer.compare(goalZ, agentZ);
 
-        double goalRelX = (goalX - agentX) / (double) arenaWidth;
-        double goalRelZ = (goalZ - agentZ) / (double) arenaLength;
+        double normDist = manhattanDistance(agentX, agentZ, goalX, goalZ)
+                / (double) (arenaWidth + arenaLength);
 
         double[] features = new double[] {
-                agentNormX,
-                agentNormZ,
-                goalRelX,
-                goalRelZ,
+                dxSign,
+                dzSign,
+                normDist,
                 isBlocked(Direction.NORTH) ? 1.0 : 0.0,
                 isBlocked(Direction.SOUTH) ? 1.0 : 0.0,
                 isBlocked(Direction.EAST)  ? 1.0 : 0.0,
@@ -164,6 +180,10 @@ public class GoldCollectorEnvironment implements RLEnvironment
         };
 
         return new Observation(features);
+    }
+
+    private int manhattanDistance(int x1, int z1, int x2, int z2) {
+        return Math.abs(x1 - x2) + Math.abs(z1 - z2);
     }
 
     private boolean isGoalTile(int x, int z) {
@@ -257,8 +277,8 @@ public class GoldCollectorEnvironment implements RLEnvironment
         goalZ = z;
     }
 
-    public World getWorld() {
-        return world;
+    public ArenaConfig getConfig() {
+        return config;
     }
 
     public int getAgentX() {
@@ -275,9 +295,5 @@ public class GoldCollectorEnvironment implements RLEnvironment
 
     public int getGoalZ() {
         return goalZ;
-    }
-
-    public ArenaConfig getConfig() {
-        return config;
     }
 }

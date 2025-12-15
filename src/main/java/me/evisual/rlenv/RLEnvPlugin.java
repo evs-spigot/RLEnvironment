@@ -8,6 +8,7 @@ import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
 import me.evisual.rlenv.logging.TransitionLogger;
 import me.evisual.rlenv.visual.AgentVisualizer;
 import me.evisual.rlenv.visual.ArenaVisualizer;
+import me.evisual.rlenv.visual.GraphMode;
 import me.evisual.rlenv.visual.ProgressGraphVisualizer;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -152,5 +153,16 @@ public class RLEnvPlugin extends JavaPlugin {
         boolean newState = !graphVisualizer.isEnabled();
         graphVisualizer.setEnabled(newState);
         return newState;
+    }
+
+    public boolean setGraphMode(GraphMode mode) {
+        if (graphVisualizer == null) return false;
+        graphVisualizer.setMode(mode);
+        return true;
+    }
+
+    public GraphMode getGraphMode() {
+        if (graphVisualizer == null) return null;
+        return graphVisualizer.getMode();
     }
 }

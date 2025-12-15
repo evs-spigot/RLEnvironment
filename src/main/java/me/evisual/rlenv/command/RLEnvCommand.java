@@ -2,6 +2,7 @@ package me.evisual.rlenv.command;
 
 import me.evisual.rlenv.RLEnvPlugin;
 import me.evisual.rlenv.control.EpisodeStats;
+import me.evisual.rlenv.visual.GraphMode;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -46,7 +47,7 @@ public class RLEnvCommand implements CommandExecutor {
                 return true;
             }
             case "graph" -> {
-                handleGraph(sender);
+                handleGraph(sender, args);
                 return true;
             }
             default -> {
@@ -71,20 +72,46 @@ public class RLEnvCommand implements CommandExecutor {
         sender.sendMessage(ChatColor.GREEN + "RL environment started.");
     }
 
-    private void handleGraph(CommandSender sender) {
+    private void handleGraph(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(ChatColor.RED + "Only players can toggle graphs.");
+            sender.sendMessage(ChatColor.RED + "Only players can use graph commands.");
             return;
         }
-
         if (!plugin.isEnvironmentRunning()) {
             sender.sendMessage(ChatColor.RED + "Environment is not running.");
             return;
         }
 
-        boolean newState = plugin.toggleGraphFor(player);
-        sender.sendMessage(ChatColor.GREEN + "Graph display is now " +
-                (newState ? "enabled." : "disabled."));
+        // /rlenv graph
+        if (args.length == 1) {
+            boolean newState = plugin.toggleGraphFor(player);
+            sender.sendMessage(ChatColor.GREEN + "Graph display is now " + (newState ? "enabled" : "disabled") + ".");
+            return;
+        }
+
+        // /rlenv graph mode <rolling|condense>
+        if (args.length == 3 && args[1].equalsIgnoreCase("mode")) {
+            GraphMode mode;
+            if (args[2].equalsIgnoreCase("rolling")) {
+                mode = GraphMode.ROLLING;
+            } else if (args[2].equalsIgnoreCase("condense")) {
+                mode = GraphMode.CONDENSE;
+            } else {
+                sender.sendMessage(ChatColor.RED + "Usage: /rlenv graph mode <rolling|condense>");
+                return;
+            }
+
+            boolean ok = plugin.setGraphMode(mode);
+            if (!ok) {
+                sender.sendMessage(ChatColor.RED + "Graph not available.");
+                return;
+            }
+
+            sender.sendMessage(ChatColor.GREEN + "Graph mode set to " + mode.name().toLowerCase() + ".");
+            return;
+        }
+
+        sender.sendMessage(ChatColor.RED + "Usage: /rlenv graph  OR  /rlenv graph mode <rolling|condense>");
     }
 
     private void handleStop(CommandSender sender) {

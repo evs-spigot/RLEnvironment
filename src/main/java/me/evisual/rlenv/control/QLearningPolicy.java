@@ -9,26 +9,30 @@ import java.util.Random;
 
 public class QLearningPolicy implements Policy {
 
-    private final Map<String, double[]> qTable = new HashMap<>();
-    private final Random random = new Random();
+    private final Map<String, double[]> q = new HashMap<>();
+    private final Random rng = new Random();
 
-    private final double alpha;      // learning rate
-    private final double gamma;      // discount factor
+    // Learning parameters
+    private final double alpha;  // learning rate
+    private final double gamma;  // discount
+
+    // Exploration schedule
     private final double epsilonStart;
     private final double epsilonEnd;
-    private final int epsilonDecayEpisodes;
+    private final long epsilonDecayEpisodes;
 
     private long episodesSeen = 0;
 
     public QLearningPolicy() {
-        this(0.1, 0.95, 0.8, 0.05, 500);
+        // These tend to work well for small gridworlds
+        this(0.20, 0.95, 0.60, 0.03, 600);
     }
 
     public QLearningPolicy(double alpha,
                            double gamma,
                            double epsilonStart,
                            double epsilonEnd,
-                           int epsilonDecayEpisodes) {
+                           long epsilonDecayEpisodes) {
         this.alpha = alpha;
         this.gamma = gamma;
         this.epsilonStart = epsilonStart;
@@ -38,25 +42,18 @@ public class QLearningPolicy implements Policy {
 
     @Override
     public Action chooseAction(Observation observation) {
-        String stateKey = toStateKey(observation);
-        double[] qValues = qTable.computeIfAbsent(stateKey,
-                k -> new double[Action.values().length]);
+        String key = toStateKey(observation);
+        double[] qValues = q.computeIfAbsent(key, k -> new double[Action.values().length]);
 
-        double epsilon = currentEpsilon();
+        double eps = currentEpsilon();
 
-        if (random.nextDouble() < epsilon) {
+        // Epsilon-greedy
+        if (rng.nextDouble() < eps) {
             return randomAction();
         }
 
-        int bestIndex = 0;
-        double bestValue = qValues[0];
-        for (int i = 1; i < qValues.length; i++) {
-            if (qValues[i] > bestValue) {
-                bestValue = qValues[i];
-                bestIndex = i;
-            }
-        }
-        return Action.values()[bestIndex];
+        int bestIdx = argMax(qValues);
+        return Action.values()[bestIdx];
     }
 
     @Override
@@ -65,74 +62,80 @@ public class QLearningPolicy implements Policy {
                                   double reward,
                                   Observation nextState,
                                   boolean done) {
-        String stateKey = toStateKey(state);
-        String nextKey = toStateKey(nextState);
+        String sKey = toStateKey(state);
+        String s2Key = toStateKey(nextState);
 
-        double[] qValues = qTable.computeIfAbsent(stateKey,
-                k -> new double[Action.values().length]);
-        double[] nextQ = qTable.computeIfAbsent(nextKey,
-                k -> new double[Action.values().length]);
+        double[] qs = q.computeIfAbsent(sKey, k -> new double[Action.values().length]);
+        double[] qs2 = q.computeIfAbsent(s2Key, k -> new double[Action.values().length]);
 
-        int actionIndex = action.ordinal();
+        int a = action.ordinal();
 
-        double maxNext = 0.0;
-        if (!done) {
-            maxNext = nextQ[0];
-            for (int i = 1; i < nextQ.length; i++) {
-                if (nextQ[i] > maxNext) {
-                    maxNext = nextQ[i];
-                }
-            }
-        }
+        double maxNext = done ? 0.0 : qs2[argMax(qs2)];
+        double target = reward + gamma * maxNext;
 
-        double target = done ? reward : reward + gamma * maxNext;
-        double oldValue = qValues[actionIndex];
-        double updated = oldValue + alpha * (target - oldValue);
-        qValues[actionIndex] = updated;
+        qs[a] = qs[a] + alpha * (target - qs[a]);
 
         if (done) {
             episodesSeen++;
         }
     }
 
-    @Override
-    public void onEpisodeEnd() {
-        // nothing extra for now
+    private Action randomAction() {
+        Action[] actions = Action.values();
+        return actions[rng.nextInt(actions.length)];
+    }
+
+    private int argMax(double[] arr) {
+        int best = 0;
+        double bestVal = arr[0];
+        for (int i = 1; i < arr.length; i++) {
+            if (arr[i] > bestVal) {
+                bestVal = arr[i];
+                best = i;
+            }
+        }
+        return best;
     }
 
     private double currentEpsilon() {
-        double frac = Math.min(1.0, episodesSeen / (double) epsilonDecayEpisodes);
-        return epsilonStart + frac * (epsilonEnd - epsilonStart);
+        double t = Math.min(1.0, episodesSeen / (double) epsilonDecayEpisodes);
+        return epsilonStart + t * (epsilonEnd - epsilonStart);
     }
 
-    private Action randomAction() {
-        Action[] actions = Action.values();
-        return actions[random.nextInt(actions.length)];
-    }
+    /**
+     * Matches the NEW observation layout from GoldCollectorEnvironment:
+     * 0 dxSign (-1,0,1)
+     * 1 dzSign (-1,0,1)
+     * 2 normDist (continuous 0..~1)
+     * 3..6 blocked bits
+     * 7..10 hazard bits
+     */
+    private String toStateKey(Observation obs) {
+        double[] f = obs.getFeatures();
 
-    private String toStateKey(Observation observation) {
-        double[] f = observation.getFeatures();
-        StringBuilder sb = new StringBuilder(f.length * 3);
-        for (int i = 0; i < f.length; i++) {
-            int bin = quantizeToBin(f[i], 5);
-            sb.append(bin);
-            if (i < f.length - 1) {
-                sb.append(',');
-            }
+        int dx = clampInt((int) Math.round(f[0]), -1, 1);
+        int dz = clampInt((int) Math.round(f[1]), -1, 1);
+
+        // distance bins (0..5)
+        int distBin = (int) Math.floor(clamp01(f[2]) * 6.0);
+        if (distBin >= 6) distBin = 5;
+
+        StringBuilder sb = new StringBuilder(32);
+        sb.append(dx).append(',').append(dz).append(',').append(distBin);
+
+        // blocked/hazard bits should be exact 0/1
+        for (int i = 3; i < f.length; i++) {
+            sb.append(',').append(f[i] >= 0.5 ? 1 : 0);
         }
+
         return sb.toString();
     }
 
-    private int quantizeToBin(double value, int bins) {
-        double clamped = Math.max(-1.0, Math.min(1.0, value));
-        double normalized = (clamped + 1.0) / 2.0;
-        int index = (int) Math.floor(normalized * bins);
-        if (index >= bins) {
-            index = bins - 1;
-        }
-        if (index < 0) {
-            index = 0;
-        }
-        return index;
+    private double clamp01(double v) {
+        return Math.max(0.0, Math.min(1.0, v));
+    }
+
+    private int clampInt(int v, int min, int max) {
+        return Math.max(min, Math.min(max, v));
     }
 }
