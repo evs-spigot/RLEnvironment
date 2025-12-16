@@ -168,21 +168,15 @@ public class RLEnvCommand implements CommandExecutor {
             return;
         }
 
-        int steps;
+        double sps;
         try {
-            steps = Integer.parseInt(args[1]);
+            sps = Double.parseDouble(args[1]);
         } catch (NumberFormatException e) {
-            sender.sendMessage(ChatColor.RED + "Speed must be an integer (e.g., 1, 2, 5, 10).");
+            sender.sendMessage(ChatColor.RED + "Speed must be a number (e.g., 0.5, 1, 10, 200).");
             return;
         }
-
-        boolean ok = plugin.setEnvironmentSpeed(steps);
-        if (!ok) {
-            sender.sendMessage(ChatColor.RED + "Failed to change speed (runner not available).");
-            return;
-        }
-
-        sender.sendMessage(ChatColor.GREEN + "Environment speed set to " + steps + " steps per tick.");
+        plugin.setEnvironmentSpeed(sps);
+        sender.sendMessage(ChatColor.GREEN + "Environment speed set to " + sps + " steps/sec.");
     }
 
     private void sendUsage(CommandSender sender) {

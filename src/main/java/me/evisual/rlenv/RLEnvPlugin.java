@@ -79,7 +79,8 @@ public class RLEnvPlugin extends JavaPlugin {
         transitionLogger = new TransitionLogger(dataFolder);
 
         Policy policy = new QLearningPolicy(); // or RandomPolicy if you prefer
-        AgentVisualizer visualizer = new AgentVisualizer(world, arenaConfig.y());
+        AgentVisualizer visualizer = new AgentVisualizer(this, arenaConfig);
+
         Location graphOrigin = new Location(
                 arenaConfig.world(),
                 arenaConfig.maxX() + 2.0,
@@ -118,14 +119,16 @@ public class RLEnvPlugin extends JavaPlugin {
             graphVisualizer = null;
         }
 
+        if (environment instanceof GoldCollectorEnvironment env) {
+            env.getTerrainSnapshot().restore(env.getConfig().world());
+        }
+
         environment = null;
     }
 
-    public boolean setEnvironmentSpeed(int stepsPerTick) {
-        if (episodeRunner == null) {
-            return false;
-        }
-        episodeRunner.setStepsPerTick(stepsPerTick);
+    public boolean setEnvironmentSpeed(double stepsPerSecond) {
+        if (episodeRunner == null) return false;
+        episodeRunner.setStepsPerSecond(stepsPerSecond);
         return true;
     }
 

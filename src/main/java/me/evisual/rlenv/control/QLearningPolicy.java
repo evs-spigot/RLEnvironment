@@ -14,30 +14,44 @@ public class QLearningPolicy implements Policy {
 
     // Learning parameters
     private final double alpha;  // learning rate
-    private final double gamma;  // discount
+    private final double gamma;  // discount factor
 
     // Exploration schedule
     private final double epsilonStart;
     private final double epsilonEnd;
     private final long epsilonDecayEpisodes;
-
     private long episodesSeen = 0;
 
+    // Time-penalty shaping (encourages shortest paths)
+    private final double timePenaltyBase;   // constant penalty each step (on top of env reward)
+    private final double timePenaltySlope;  // grows with step index: penalty += slope * stepIndex
+    private int stepIndexInEpisode = 0;
+
     public QLearningPolicy() {
-        // These tend to work well for small gridworlds
-        this(0.20, 0.95, 0.60, 0.03, 600);
+        // Good defaults for a small gridworld-ish environment
+        this(
+                0.20, 0.95,
+                0.60, 0.03, 600,
+                0.00, 0.01 // prev 0.002
+        );
+        // timePenaltyBase = 0.00 means "only increasing penalty"
+        // timePenaltySlope = 0.002: by step 200 penalty ~ 0.4 additional (noticeable but not insane)
     }
 
     public QLearningPolicy(double alpha,
                            double gamma,
                            double epsilonStart,
                            double epsilonEnd,
-                           long epsilonDecayEpisodes) {
+                           long epsilonDecayEpisodes,
+                           double timePenaltyBase,
+                           double timePenaltySlope) {
         this.alpha = alpha;
         this.gamma = gamma;
         this.epsilonStart = epsilonStart;
         this.epsilonEnd = epsilonEnd;
         this.epsilonDecayEpisodes = Math.max(1, epsilonDecayEpisodes);
+        this.timePenaltyBase = Math.max(0.0, timePenaltyBase);
+        this.timePenaltySlope = Math.max(0.0, timePenaltySlope);
     }
 
     @Override
@@ -46,8 +60,6 @@ public class QLearningPolicy implements Policy {
         double[] qValues = q.computeIfAbsent(key, k -> new double[Action.values().length]);
 
         double eps = currentEpsilon();
-
-        // Epsilon-greedy
         if (rng.nextDouble() < eps) {
             return randomAction();
         }
@@ -62,6 +74,11 @@ public class QLearningPolicy implements Policy {
                                   double reward,
                                   Observation nextState,
                                   boolean done) {
+
+        // stepIndexInEpisode starts at 0, increments each transition
+        double timePenalty = timePenaltyBase + (timePenaltySlope * stepIndexInEpisode);
+        double shapedReward = reward - timePenalty;
+
         String sKey = toStateKey(state);
         String s2Key = toStateKey(nextState);
 
@@ -71,13 +88,22 @@ public class QLearningPolicy implements Policy {
         int a = action.ordinal();
 
         double maxNext = done ? 0.0 : qs2[argMax(qs2)];
-        double target = reward + gamma * maxNext;
+        double target = shapedReward + gamma * maxNext;
 
         qs[a] = qs[a] + alpha * (target - qs[a]);
 
+        stepIndexInEpisode++;
+
         if (done) {
             episodesSeen++;
+            stepIndexInEpisode = 0;
         }
+    }
+
+    @Override
+    public void onEpisodeEnd() {
+        // Safety reset (in case something ends an episode without calling observeTransition(done=true))
+        stepIndexInEpisode = 0;
     }
 
     private Action randomAction() {
@@ -103,28 +129,40 @@ public class QLearningPolicy implements Policy {
     }
 
     /**
-     * Matches the NEW observation layout from GoldCollectorEnvironment:
+     * This matches the newer observation format (direction + distance bins + bits)
+     *
+     * Expected layout (from your improved environment):
      * 0 dxSign (-1,0,1)
      * 1 dzSign (-1,0,1)
-     * 2 normDist (continuous 0..~1)
-     * 3..6 blocked bits
-     * 7..10 hazard bits
+     * 2 dySign (-1,0,1)  (if present)
+     * 3 normDist (0..~1)
+     * 4.. bits (blocked/hazard/etc)
      */
     private String toStateKey(Observation obs) {
         double[] f = obs.getFeatures();
 
-        int dx = clampInt((int) Math.round(f[0]), -1, 1);
-        int dz = clampInt((int) Math.round(f[1]), -1, 1);
+        // Handle either layout:
+        // If dySign: dx, dz, dy, dist...
+        // If not: dx, dz, dist...
+        int idx = 0;
 
-        // distance bins (0..5)
-        int distBin = (int) Math.floor(clamp01(f[2]) * 6.0);
+        int dx = clampInt((int) Math.round(f[idx++]), -1, 1);
+        int dz = clampInt((int) Math.round(f[idx++]), -1, 1);
+
+        // If there is a third sign feature (dy), include it; otherwise treat as 0
+        int dy = 0;
+        if (f.length >= 4) {
+            dy = clampInt((int) Math.round(f[idx++]), -1, 1);
+        }
+
+        double distVal = f[idx++];
+        int distBin = (int) Math.floor(clamp01(distVal) * 6.0);
         if (distBin >= 6) distBin = 5;
 
-        StringBuilder sb = new StringBuilder(32);
-        sb.append(dx).append(',').append(dz).append(',').append(distBin);
+        StringBuilder sb = new StringBuilder(48);
+        sb.append(dx).append(',').append(dz).append(',').append(dy).append(',').append(distBin);
 
-        // blocked/hazard bits should be exact 0/1
-        for (int i = 3; i < f.length; i++) {
+        for (int i = idx; i < f.length; i++) {
             sb.append(',').append(f[i] >= 0.5 ? 1 : 0);
         }
 

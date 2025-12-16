@@ -6,6 +6,8 @@ import me.evisual.rlenv.env.RLEnvironment;
 import me.evisual.rlenv.env.StepResult;
 import me.evisual.rlenv.util.BlockUtil;
 import me.evisual.rlenv.util.LocationUtil;
+import me.evisual.rlenv.world.ArenaTerrain;
+import me.evisual.rlenv.world.TerrainSnapshot;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -33,29 +35,21 @@ import java.util.Set;
  */
 public class GoldCollectorEnvironment implements RLEnvironment {
 
-    private enum Direction {
-        NORTH, SOUTH, EAST, WEST
-    }
+    private enum Direction { NORTH, SOUTH, EAST, WEST }
 
     private final ArenaConfig config;
     private final World world;
-    private final int arenaWidth;
-    private final int arenaLength;
     private final Random random = new Random();
-
-    private final Set<Material> hazardMaterials =
-            EnumSet.of(Material.LAVA, Material.MAGMA_BLOCK);
 
     private final Material goalMarkerMaterial = Material.GOLD_BLOCK;
 
-    private int agentX;
-    private int agentZ;
+    private ArenaTerrain terrain;
+    private TerrainSnapshot snapshot;
 
-    private int goalX;
-    private int goalZ;
+    private int agentX, agentY, agentZ;
+    private int goalX, goalY, goalZ;
 
-    private int lastGoalX;
-    private int lastGoalZ;
+    private int lastGoalX, lastGoalY, lastGoalZ;
     private Material lastGoalOriginalType;
     private boolean hasPlacedGoalBefore = false;
 
@@ -65,8 +59,8 @@ public class GoldCollectorEnvironment implements RLEnvironment {
     public GoldCollectorEnvironment(ArenaConfig config) {
         this.config = config;
         this.world = config.world();
-        this.arenaWidth = (config.maxX() - config.minX()) + 1;
-        this.arenaLength = (config.maxZ() - config.minZ()) + 1;
+        this.terrain = new ArenaTerrain(config);
+        this.snapshot = terrain.snapshot();
     }
 
     @Override
@@ -74,24 +68,26 @@ public class GoldCollectorEnvironment implements RLEnvironment {
         done = false;
         steps = 0;
 
-        int[] agentPos = sampleRandomWalkableTile();
+        // Build “natural” terrain inside the arena once per reset (you can change to only build on start)
+        // If you prefer persistent terrain across episodes, move generate() out of reset() and into plugin start.
+        terrain.generate(random.nextLong());
+
+        int[] agentPos = sampleRandomTile();
         agentX = agentPos[0];
         agentZ = agentPos[1];
+        agentY = terrain.surfaceY(agentX, agentZ);
 
-        int[] goalPos = sampleRandomGoalTileDifferentFrom(agentX, agentZ);
-        setGoal(goalPos[0], goalPos[1]);
+        int[] goalPos = sampleRandomTileDifferentFrom(agentX, agentZ);
+        setGoalOnSurface(goalPos[0], goalPos[1]);
 
         return buildObservation();
     }
 
     @Override
     public StepResult step(Action action) {
-        if (done) {
-            return new StepResult(buildObservation(), 0.0, true);
-        }
+        if (done) return new StepResult(buildObservation(), 0.0, true);
 
-        // Distance before moving (for shaping)
-        int prevDist = manhattanDistance(agentX, agentZ, goalX, goalZ);
+        int prevDist = manhattan(agentX, agentZ, goalX, goalZ);
 
         int newX = agentX;
         int newZ = agentZ;
@@ -108,192 +104,189 @@ public class GoldCollectorEnvironment implements RLEnvironment {
         newX = LocationUtil.clamp(newX, config.minX(), config.maxX());
         newZ = LocationUtil.clamp(newZ, config.minZ(), config.maxZ());
 
+        // Height-based movement rule:
+        // allow stepping up/down by 1; if diff > 1, treat as blocked (stay put)
+        int curSurfaceY = terrain.surfaceY(agentX, agentZ);
+        int nextSurfaceY = terrain.surfaceY(newX, newZ);
+        int dy = nextSurfaceY - curSurfaceY;
+
+        if (Math.abs(dy) > 1) {
+            // blocked by steep slope
+            newX = agentX;
+            newZ = agentZ;
+            nextSurfaceY = curSurfaceY;
+        }
+
         agentX = newX;
         agentZ = newZ;
+        agentY = nextSurfaceY;
 
-        int newDist = manhattanDistance(agentX, agentZ, goalX, goalZ);
+        int newDist = manhattan(agentX, agentZ, goalX, goalZ);
 
         boolean terminal = false;
         double reward;
 
-        if (isGoalTile(agentX, agentZ)) {
+        if (agentX == goalX && agentZ == goalZ) {
             reward = 10.0;
             terminal = true;
-        } else if (isHazardTile(agentX, agentZ)) {
-            reward = -10.0;
-            terminal = true;
         } else {
-            // small step cost so shorter paths are preferred
             reward = -0.01;
 
-            // ✅ reward shaping: moving closer is good, moving away is bad
+            // shaping (distance to goal)
             if (newDist < prevDist) reward += 0.20;
             else if (newDist > prevDist) reward -= 0.20;
+
+            // small penalty for changing height (encourages smoother paths when equal)
+            reward -= 0.01 * Math.abs(dy);
         }
 
         steps++;
-        if (steps >= config.maxStepsPerEpisode()) {
-            terminal = true;
-        }
+        if (steps >= config.maxStepsPerEpisode()) terminal = true;
 
         done = terminal;
         return new StepResult(buildObservation(), reward, terminal);
     }
 
-    @Override
-    public boolean isDone() {
-        return done;
-    }
-
-    @Override
-    public Observation getObservation() {
-        return buildObservation();
-    }
+    @Override public boolean isDone() { return done; }
+    @Override public Observation getObservation() { return buildObservation(); }
 
     /**
-     * New observation format (compact + directional):
-     * 0: dxSign (-1,0,1)
-     * 1: dzSign (-1,0,1)
-     * 2: normalized manhattan distance to goal (0..~1)
-     * 3..6: blocked (N,S,E,W) {0,1}
-     * 7..10: hazard adjacent (N,S,E,W) {0,1}
+     * Observation:
+     * 0 dxSign (-1,0,1)
+     * 1 dzSign (-1,0,1)
+     * 2 dySign (-1,0,1)  (surface y compare)
+     * 3 normManhattanDist (0..~1)
+     * 4..7 blocked N,S,E,W (0/1) by boundary or steep slope (>1 height diff)
      */
     private Observation buildObservation() {
-        int dxSign = Integer.compare(goalX, agentX); // -1,0,1
+        int dxSign = Integer.compare(goalX, agentX);
         int dzSign = Integer.compare(goalZ, agentZ);
+        int dySign = Integer.compare(goalY, agentY);
 
-        double normDist = manhattanDistance(agentX, agentZ, goalX, goalZ)
-                / (double) (arenaWidth + arenaLength);
+        double normDist = manhattan(agentX, agentZ, goalX, goalZ)
+                / (double) ((config.maxX() - config.minX() + 1) + (config.maxZ() - config.minZ() + 1));
 
-        double[] features = new double[] {
+        double[] f = new double[] {
                 dxSign,
                 dzSign,
+                dySign,
                 normDist,
                 isBlocked(Direction.NORTH) ? 1.0 : 0.0,
                 isBlocked(Direction.SOUTH) ? 1.0 : 0.0,
                 isBlocked(Direction.EAST)  ? 1.0 : 0.0,
-                isBlocked(Direction.WEST)  ? 1.0 : 0.0,
-                isHazard(Direction.NORTH)  ? 1.0 : 0.0,
-                isHazard(Direction.SOUTH)  ? 1.0 : 0.0,
-                isHazard(Direction.EAST)   ? 1.0 : 0.0,
-                isHazard(Direction.WEST)   ? 1.0 : 0.0
+                isBlocked(Direction.WEST)  ? 1.0 : 0.0
         };
 
-        return new Observation(features);
-    }
-
-    private int manhattanDistance(int x1, int z1, int x2, int z2) {
-        return Math.abs(x1 - x2) + Math.abs(z1 - z2);
-    }
-
-    private boolean isGoalTile(int x, int z) {
-        return x == goalX && z == goalZ;
-    }
-
-    private boolean isHazardTile(int x, int z) {
-        return BlockUtil.isHazard(world, x, config.y(), z, hazardMaterials);
+        return new Observation(f);
     }
 
     private boolean isBlocked(Direction dir) {
-        int[] next = nextCoords(agentX, agentZ, dir);
-        int x = next[0];
-        int z = next[1];
-        return !LocationUtil.isWithinBounds(x, z,
-                config.minX(), config.maxX(),
-                config.minZ(), config.maxZ());
+        int nx = agentX;
+        int nz = agentZ;
+
+        switch (dir) {
+            case NORTH -> nz -= 1;
+            case SOUTH -> nz += 1;
+            case EAST -> nx += 1;
+            case WEST -> nx -= 1;
+        }
+
+        if (!LocationUtil.isWithinBounds(nx, nz, config.minX(), config.maxX(), config.minZ(), config.maxZ())) {
+            return true;
+        }
+
+        int curY = terrain.surfaceY(agentX, agentZ);
+        int nextY = terrain.surfaceY(nx, nz);
+        return Math.abs(nextY - curY) > 1;
     }
 
-    private boolean isHazard(Direction dir) {
-        int[] next = nextCoords(agentX, agentZ, dir);
-        int x = LocationUtil.clamp(next[0], config.minX(), config.maxX());
-        int z = LocationUtil.clamp(next[1], config.minZ(), config.maxZ());
-        return isHazardTile(x, z);
+    private int manhattan(int x1, int z1, int x2, int z2) {
+        return Math.abs(x1 - x2) + Math.abs(z1 - z2);
     }
 
-    private int[] nextCoords(int x, int z, Direction dir) {
-        return switch (dir) {
-            case NORTH -> new int[] { x, z - 1 };
-            case SOUTH -> new int[] { x, z + 1 };
-            case EAST  -> new int[] { x + 1, z };
-            case WEST  -> new int[] { x - 1, z };
-        };
+    private int[] sampleRandomTile() {
+        int x = config.minX() + random.nextInt((config.maxX() - config.minX()) + 1);
+        int z = config.minZ() + random.nextInt((config.maxZ() - config.minZ()) + 1);
+        return new int[] { x, z };
     }
 
-    private int[] sampleRandomWalkableTile() {
+    private int[] sampleRandomTileDifferentFrom(int avoidX, int avoidZ) {
         for (int attempt = 0; attempt < 64; attempt++) {
-            int x = config.minX() + random.nextInt(arenaWidth);
-            int z = config.minZ() + random.nextInt(arenaLength);
-            if (!isHazardTile(x, z)) {
-                return new int[] { x, z };
-            }
+            int[] p = sampleRandomTile();
+            if (p[0] != avoidX || p[1] != avoidZ) return p;
         }
-
-        for (int x = config.minX(); x <= config.maxX(); x++) {
-            for (int z = config.minZ(); z <= config.maxZ(); z++) {
-                if (!isHazardTile(x, z)) {
-                    return new int[] { x, z };
-                }
-            }
-        }
-
-        throw new IllegalStateException("No walkable tiles available in the arena");
+        // fallback
+        int x = (avoidX == config.minX()) ? config.maxX() : config.minX();
+        int z = (avoidZ == config.minZ()) ? config.maxZ() : config.minZ();
+        return new int[] { x, z };
     }
 
-    private int[] sampleRandomGoalTileDifferentFrom(int avoidX, int avoidZ) {
-        for (int attempt = 0; attempt < 64; attempt++) {
-            int x = config.minX() + random.nextInt(arenaWidth);
-            int z = config.minZ() + random.nextInt(arenaLength);
-            if ((x != avoidX || z != avoidZ) && !isHazardTile(x, z)) {
-                return new int[] { x, z };
-            }
-        }
+    private void setGoalOnSurface(int x, int z) {
+        int y = terrain.surfaceY(x, z);
 
-        for (int x = config.minX(); x <= config.maxX(); x++) {
-            for (int z = config.minZ(); z <= config.maxZ(); z++) {
-                if ((x != avoidX || z != avoidZ) && !isHazardTile(x, z)) {
-                    return new int[] { x, z };
-                }
-            }
-        }
-
-        throw new IllegalStateException("No suitable goal tile available in the arena");
-    }
-
-    private void setGoal(int x, int z) {
+        // restore old goal block
         if (hasPlacedGoalBefore) {
-            Block previous = world.getBlockAt(lastGoalX, config.y(), lastGoalZ);
-            previous.setType(lastGoalOriginalType, false);
+            world.getBlockAt(lastGoalX, lastGoalY, lastGoalZ).setType(lastGoalOriginalType, false);
+
+            // also clear any old "cover" if it still exists (safe)
+            world.getBlockAt(lastGoalX, lastGoalY + 1, lastGoalZ).setType(Material.AIR, false);
         }
 
-        Block block = world.getBlockAt(x, config.y(), z);
-        lastGoalOriginalType = block.getType();
+        // place gold marker on the surface block (one below standing Y)
+        Block goalBlock = world.getBlockAt(x, y - 1, z);
+        lastGoalOriginalType = goalBlock.getType();
         lastGoalX = x;
+        lastGoalY = y - 1;
         lastGoalZ = z;
         hasPlacedGoalBefore = true;
 
-        block.setType(goalMarkerMaterial, false);
+        goalBlock.setType(goalMarkerMaterial, false);
 
         goalX = x;
         goalZ = z;
+        goalY = y;
+
+        // ✅ NEW: Cover the goal sometimes so the agent has to break in
+        // (puts a solid block where the zombie wants to stand)
+        if (random.nextDouble() < 0.65) {
+            Block cover = world.getBlockAt(x, y, z); // standing space
+            if (cover.getType() == Material.AIR || cover.isPassable()) {
+                cover.setType(Material.DIRT, false); // breakable "cap"
+            }
+        }
+
+        // ✅ NEW: Add a small 1-block “wall” around goal sometimes (forces jump/break)
+        if (random.nextDouble() < 0.35) {
+            placeGoalRing(x, y, z);
+        }
     }
 
-    public ArenaConfig getConfig() {
-        return config;
+    private void placeGoalRing(int x, int y, int z) {
+        // 4-neighbor ring at standing height (y)
+        placeIfAirOrPassable(x + 1, y, z, Material.COBBLESTONE);
+        placeIfAirOrPassable(x - 1, y, z, Material.COBBLESTONE);
+        placeIfAirOrPassable(x, y, z + 1, Material.COBBLESTONE);
+        placeIfAirOrPassable(x, y, z - 1, Material.COBBLESTONE);
     }
 
-    public int getAgentX() {
-        return agentX;
+    private void placeIfAirOrPassable(int x, int y, int z, Material m) {
+        if (!LocationUtil.isWithinBounds(x, z, config.minX(), config.maxX(), config.minZ(), config.maxZ())) {
+            return;
+        }
+        Block b = world.getBlockAt(x, y, z);
+        if (b.getType() == Material.AIR || b.isPassable()) {
+            b.setType(m, false);
+        }
     }
 
-    public int getAgentZ() {
-        return agentZ;
-    }
+    public ArenaConfig getConfig() { return config; }
+    public TerrainSnapshot getTerrainSnapshot() { return snapshot; }
 
-    public int getGoalX() {
-        return goalX;
-    }
+    public int getAgentX() { return agentX; }
+    public int getAgentY() { return agentY; }
+    public int getAgentZ() { return agentZ; }
 
-    public int getGoalZ() {
-        return goalZ;
-    }
+    public int getGoalX() { return goalX; }
+    public int getGoalY() { return goalY; }
+    public int getGoalZ() { return goalZ; }
 }

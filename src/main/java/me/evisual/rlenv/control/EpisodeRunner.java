@@ -17,12 +17,16 @@ public class EpisodeRunner extends BukkitRunnable {
     private final Policy policy;
     private final AgentVisualizer visualizer;
     private final ProgressGraphVisualizer graph;
-    private final int graphSampleEveryEpisodes = 5;
 
     private Observation currentObservation;
     private boolean closed = false;
 
-    private int stepsPerTick = 1;
+    // Speed: environment steps per second (can be < 1.0)
+    private double stepsPerSecond = 10.0;
+    private double stepAccumulator = 0.0;
+
+    // Safety cap so we don't spiral if someone sets absurd speeds
+    private int maxStepsPerTick = 200;
 
     private long episodesCompleted = 0;
     private long successCount = 0;
@@ -32,10 +36,14 @@ public class EpisodeRunner extends BukkitRunnable {
     private double currentEpisodeReward = 0.0;
     private int stepsThisEpisode = 0;
 
-    private final double[] rewardWindow = new double[50]; // last 50 episodes
+    // Moving average window (for "learning curve")
+    private final double[] rewardWindow = new double[50];
     private int rewardWindowSize = 0;
     private int rewardWindowIndex = 0;
     private double rewardWindowSum = 0.0;
+
+    // Graph sampling: push one point every N episodes (helps performance at high speed)
+    private final int graphSampleEveryEpisodes = 5;
 
     public EpisodeRunner(RLEnvironment environment,
                          TransitionLogger logger,
@@ -49,8 +57,6 @@ public class EpisodeRunner extends BukkitRunnable {
         this.graph = graph;
 
         this.currentObservation = environment.reset();
-        this.currentEpisodeReward = 0.0;
-        this.stepsThisEpisode = 0;
         updateVisualizer();
     }
 
@@ -65,12 +71,26 @@ public class EpisodeRunner extends BukkitRunnable {
             currentObservation = environment.getObservation();
         }
 
-        int maxSteps = Math.max(1, stepsPerTick);
+        // Convert steps/sec into steps per tick using an accumulator
+        stepAccumulator += (stepsPerSecond / 20.0);
 
-        for (int i = 0; i < maxSteps; i++) {
-            if (closed) {
-                break;
-            }
+        int stepsToRun = (int) Math.floor(stepAccumulator);
+        if (stepsToRun <= 0) {
+            // Still update visuals even if we didn't step
+            updateVisualizer();
+            return;
+        }
+
+        // Consume accumulator
+        stepAccumulator -= stepsToRun;
+
+        // Cap steps for safety
+        if (stepsToRun > maxStepsPerTick) {
+            stepsToRun = maxStepsPerTick;
+        }
+
+        for (int i = 0; i < stepsToRun; i++) {
+            if (closed) break;
 
             Action action = policy.chooseAction(currentObservation);
             StepResult result = environment.step(action);
@@ -86,7 +106,6 @@ public class EpisodeRunner extends BukkitRunnable {
                     result.isDone()
             );
 
-            // NEW: let the policy learn from this transition
             policy.observeTransition(
                     currentObservation,
                     action,
@@ -118,7 +137,7 @@ public class EpisodeRunner extends BukkitRunnable {
         if (lastStep.getReward() > 0) successCount++;
         else failureCount++;
 
-        // Sliding window average
+        // sliding window
         if (rewardWindowSize < rewardWindow.length) {
             rewardWindow[rewardWindowIndex] = currentEpisodeReward;
             rewardWindowSum += currentEpisodeReward;
@@ -127,7 +146,7 @@ public class EpisodeRunner extends BukkitRunnable {
         } else {
             double old = rewardWindow[rewardWindowIndex];
             rewardWindow[rewardWindowIndex] = currentEpisodeReward;
-            rewardWindowSum += currentEpisodeReward - old;
+            rewardWindowSum += (currentEpisodeReward - old);
             rewardWindowIndex = (rewardWindowIndex + 1) % rewardWindow.length;
         }
 
@@ -139,11 +158,10 @@ public class EpisodeRunner extends BukkitRunnable {
     }
 
     private void updateVisualizer() {
-        if (visualizer == null) {
-            return;
-        }
+        if (visualizer == null) return;
+
         if (environment instanceof GoldCollectorEnvironment env) {
-            visualizer.updatePosition(env.getAgentX(), env.getAgentZ());
+            visualizer.updatePosition(env.getAgentX(), env.getAgentY(), env.getAgentZ());
         }
     }
 
@@ -151,31 +169,28 @@ public class EpisodeRunner extends BukkitRunnable {
         closed = true;
         cancel();
         logger.close();
-        if (visualizer != null) {
-            visualizer.destroy();
-        }
+        if (visualizer != null) visualizer.destroy();
     }
 
-    public void setStepsPerTick(int stepsPerTick) {
-        if (stepsPerTick < 1) {
-            this.stepsPerTick = 1;
-        } else if (stepsPerTick > 50) {
-            this.stepsPerTick = 50;
-        } else {
-            this.stepsPerTick = stepsPerTick;
-        }
+    public void setStepsPerSecond(double stepsPerSecond) {
+        // allow very slow, and very fast
+        if (stepsPerSecond < 0.1) stepsPerSecond = 0.1;   // 1 step every 10 seconds
+        if (stepsPerSecond > 2000) stepsPerSecond = 2000; // safety
+        this.stepsPerSecond = stepsPerSecond;
+    }
+
+    public double getStepsPerSecond() {
+        return stepsPerSecond;
     }
 
     public EpisodeStats snapshotStats() {
-        double avgReward = episodesCompleted > 0
-                ? totalRewardSum / episodesCompleted
-                : 0.0;
+        double avgReward = episodesCompleted > 0 ? totalRewardSum / episodesCompleted : 0.0;
         return new EpisodeStats(
                 episodesCompleted,
                 successCount,
                 failureCount,
                 avgReward,
-                stepsPerTick
+                (int) Math.round(stepsPerSecond)
         );
     }
 }
