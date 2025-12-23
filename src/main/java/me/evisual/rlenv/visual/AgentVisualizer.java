@@ -4,8 +4,9 @@ import me.evisual.rlenv.env.goldcollector.ArenaConfig;
 import me.evisual.rlenv.util.LocationUtil;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Particle;
+import org.bukkit.Sound;
 import org.bukkit.World;
-import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Zombie;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -53,7 +54,9 @@ public class AgentVisualizer {
 
     /** Environment calls this every tick/step with logical agent coords. */
     public void updatePosition(int x, int y, int z) {
-        this.target = LocationUtil.centerOfBlock(world, x, y, z);
+        Location t = LocationUtil.centerOfBlock(world, x, y, z);
+        t.setY(t.getY() - 0.35); // visual "feet on ground" offset for baby zombie
+        this.target = t;
 
         if (zombie == null || zombie.isDead()) {
             spawnAt(this.target);
@@ -63,11 +66,12 @@ public class AgentVisualizer {
     private void spawnAt(Location loc) {
         zombie = world.spawn(loc, Zombie.class, z -> {
             z.setBaby(true);
-            z.setAI(false);                 // we control it
+            z.setAI(false);
             z.setSilent(true);
             z.setInvulnerable(true);
             z.setCollidable(false);
             z.setCanPickupItems(false);
+            z.setGlowing(true);
             z.setRemoveWhenFarAway(false);
             z.setPersistent(true);
             z.setCustomName("RL Agent");
@@ -91,16 +95,13 @@ public class AgentVisualizer {
 
                 // Apply simple vertical physics every tick
                 yVel -= gravity;
-                if (yVel < -0.6) yVel = -0.6; // clamp falling speed
+                if (yVel < -0.6) yVel = -0.6;
 
-                // If very close horizontally, settle on target and zero velocity
                 if (dist <= stopDistance) {
-                    // Snap horizontally; keep vertical smoothing to land nicely
                     Location snap = cur.clone();
                     snap.setX(target.getX());
                     snap.setZ(target.getZ());
 
-                    // Move Y toward target with our yVel
                     double nextY = snap.getY() + yVel;
                     if (nextY <= target.getY()) {
                         nextY = target.getY();
@@ -116,32 +117,25 @@ public class AgentVisualizer {
 
                 Vector dir = horiz.normalize();
 
-                // Obstacle logic (break / jump)
                 handleObstacles(cur, dir);
 
-                // Move toward target in small increments
                 Vector step = dir.multiply(Math.min(stepPerTick, dist));
                 Location next = cur.clone().add(step);
 
-                // Vertical motion toward targetY (plus jump physics)
                 double nextY = next.getY() + yVel;
 
-                // Don’t sink below target Y; “ground” is targetY for the current logical cell
-                double minY = Math.min(target.getY(), next.getY()); // safe
+                double minY = Math.min(target.getY(), next.getY());
                 if (nextY < minY) {
                     nextY = minY;
                     yVel = 0.0;
                 }
 
-                // Also don’t overshoot way above (keeps it stable)
                 if (nextY > target.getY() + 1.2) {
                     nextY = target.getY() + 1.2;
                     yVel = 0.0;
                 }
 
                 next.setY(nextY);
-
-                // Face movement direction
                 next.setYaw(yawFromVector(step));
                 next.setPitch(0f);
 
@@ -153,7 +147,6 @@ public class AgentVisualizer {
     }
 
     private void handleObstacles(Location cur, Vector dir) {
-        // Determine a “forward” block using dominant axis
         int stepX = 0;
         int stepZ = 0;
         if (Math.abs(dir.getX()) > Math.abs(dir.getZ())) stepX = (int) Math.signum(dir.getX());
@@ -176,7 +169,6 @@ public class AgentVisualizer {
         boolean feetSolid = feet.isSolid();
         boolean headSolid = head.isSolid();
 
-        // Break soft blocks first
         if (breakBlocks) {
             if (feetSolid && breakable.contains(feet)) {
                 world.getBlockAt(aheadX, y, aheadZ).breakNaturally();
@@ -188,12 +180,24 @@ public class AgentVisualizer {
             }
         }
 
-        // If still blocked at feet but head is open: jump
         if (feetSolid && !headSolid) {
             if (yVel <= 0.05) {
                 yVel = jumpVel;
             }
         }
+    }
+
+    public void onGoalHit() {
+        if (zombie == null || zombie.isDead()) return;
+
+        Location loc = zombie.getLocation().clone().add(0, 0.6, 0);
+
+        zombie.getWorld().spawnParticle(Particle.TOTEM, loc, 80, 0.4, 0.6, 0.4, 0.02);
+        zombie.getWorld().spawnParticle(Particle.FIREWORKS_SPARK, loc, 30, 0.4, 0.6, 0.4, 0.02);
+        zombie.getWorld().playSound(loc, Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.2f);
+
+        // quick "blink" to make it super obvious
+        zombie.teleport(loc.clone().add(0, 0.35, 0));
     }
 
     private float yawFromVector(Vector v) {

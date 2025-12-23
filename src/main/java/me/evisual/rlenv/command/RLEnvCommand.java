@@ -26,34 +26,14 @@ public class RLEnvCommand implements CommandExecutor {
         }
 
         switch (args[0].toLowerCase()) {
-            case "start" -> {
-                handleStart(sender);
-                return true;
-            }
-            case "stop" -> {
-                handleStop(sender);
-                return true;
-            }
-            case "status" -> {
-                handleStatus(sender);
-                return true;
-            }
-            case "showarena" -> {
-                handleShowArena(sender);
-                return true;
-            }
-            case "speed" -> {
-                handleSpeed(sender, args);
-                return true;
-            }
-            case "graph" -> {
-                handleGraph(sender, args);
-                return true;
-            }
-            default -> {
-                sendUsage(sender);
-                return true;
-            }
+            case "start" -> { handleStart(sender); return true; }
+            case "stop" -> { handleStop(sender); return true; }
+            case "status" -> { handleStatus(sender); return true; }
+            case "showarena" -> { handleShowArena(sender); return true; }
+            case "speed" -> { handleSpeed(sender, args); return true; }
+            case "graph" -> { handleGraph(sender, args); return true; }
+            case "progression" -> { handleProgression(sender, args); return true; }
+            default -> { sendUsage(sender); return true; }
         }
     }
 
@@ -62,14 +42,90 @@ public class RLEnvCommand implements CommandExecutor {
             sender.sendMessage(ChatColor.RED + "Only players can start the RL environment.");
             return;
         }
-
         if (plugin.isEnvironmentRunning()) {
             sender.sendMessage(ChatColor.RED + "Environment is already running.");
             return;
         }
-
         plugin.startEnvironment(player);
         sender.sendMessage(ChatColor.GREEN + "RL environment started.");
+    }
+
+    private void handleStop(CommandSender sender) {
+        if (!plugin.isEnvironmentRunning()) {
+            sender.sendMessage(ChatColor.RED + "Environment is not running.");
+            return;
+        }
+        plugin.stopEnvironment();
+        sender.sendMessage(ChatColor.YELLOW + "RL environment stopped.");
+    }
+
+    private void handleStatus(CommandSender sender) {
+        if (!plugin.isEnvironmentRunning()) {
+            sender.sendMessage(ChatColor.RED + "Environment is not running.");
+            return;
+        }
+
+        EpisodeStats s = plugin.getEpisodeStats();
+        if (s == null) {
+            sender.sendMessage(ChatColor.YELLOW + "No stats available yet.");
+            return;
+        }
+
+        sender.sendMessage(ChatColor.AQUA + "RL Environment Status");
+        sender.sendMessage(ChatColor.GRAY + "  Episodes: " + ChatColor.WHITE + s.episodesCompleted());
+        sender.sendMessage(ChatColor.GRAY + "  Speed: " + ChatColor.WHITE + String.format("%.2f steps/sec", s.stepsPerSecond()));
+        sender.sendMessage(ChatColor.GRAY + "  Throughput: " + ChatColor.WHITE + String.format("%.1f episodes/min", s.episodesPerMinute()));
+
+        sender.sendMessage(ChatColor.GRAY + "  Success rate: " + ChatColor.WHITE +
+                String.format("%.1f%% overall | %.1f%% recent", 100.0 * s.overallSuccessRate(), 100.0 * s.recentSuccessRate()));
+
+        sender.sendMessage(ChatColor.GRAY + "  Steps-to-goal: " + ChatColor.WHITE +
+                String.format("%.1f avg overall | %.1f avg recent | best=%d",
+                        s.overallAvgStepsToGoal(), s.recentAvgStepsToGoal(), s.bestStepsToGoal()));
+
+        sender.sendMessage(ChatColor.GRAY + "  Successes: " + ChatColor.GREEN + s.successCount()
+                + ChatColor.GRAY + "  Failures: " + ChatColor.RED + s.failureCount());
+
+        if (s.epsilon() >= 0) {
+            sender.sendMessage(ChatColor.GRAY + "  Exploration (epsilon): " + ChatColor.WHITE + String.format("%.3f", s.epsilon()));
+        }
+        if (s.stateCount() >= 0) {
+            sender.sendMessage(ChatColor.GRAY + "  Q-table states: " + ChatColor.WHITE + s.stateCount());
+        }
+    }
+
+    private void handleShowArena(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can view the arena outline.");
+            return;
+        }
+        if (!plugin.isEnvironmentRunning()) {
+            sender.sendMessage(ChatColor.RED + "Environment is not running.");
+            return;
+        }
+        plugin.showArena(player);
+    }
+
+    private void handleSpeed(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "Usage: /rlenv speed <stepsPerSecond>");
+            return;
+        }
+        if (!plugin.isEnvironmentRunning()) {
+            sender.sendMessage(ChatColor.RED + "Environment is not running.");
+            return;
+        }
+
+        double sps;
+        try {
+            sps = Double.parseDouble(args[1]);
+        } catch (NumberFormatException e) {
+            sender.sendMessage(ChatColor.RED + "Speed must be a number (e.g., 0.5, 1, 10, 200).");
+            return;
+        }
+
+        plugin.setEnvironmentSpeed(sps);
+        sender.sendMessage(ChatColor.GREEN + "Environment speed set to " + sps + " steps/sec.");
     }
 
     private void handleGraph(CommandSender sender, String[] args) {
@@ -82,21 +138,17 @@ public class RLEnvCommand implements CommandExecutor {
             return;
         }
 
-        // /rlenv graph
         if (args.length == 1) {
             boolean newState = plugin.toggleGraphFor(player);
             sender.sendMessage(ChatColor.GREEN + "Graph display is now " + (newState ? "enabled" : "disabled") + ".");
             return;
         }
 
-        // /rlenv graph mode <rolling|condense>
         if (args.length == 3 && args[1].equalsIgnoreCase("mode")) {
             GraphMode mode;
-            if (args[2].equalsIgnoreCase("rolling")) {
-                mode = GraphMode.ROLLING;
-            } else if (args[2].equalsIgnoreCase("condense")) {
-                mode = GraphMode.CONDENSE;
-            } else {
+            if (args[2].equalsIgnoreCase("rolling")) mode = GraphMode.ROLLING;
+            else if (args[2].equalsIgnoreCase("condense")) mode = GraphMode.CONDENSE;
+            else {
                 sender.sendMessage(ChatColor.RED + "Usage: /rlenv graph mode <rolling|condense>");
                 return;
             }
@@ -114,72 +166,35 @@ public class RLEnvCommand implements CommandExecutor {
         sender.sendMessage(ChatColor.RED + "Usage: /rlenv graph  OR  /rlenv graph mode <rolling|condense>");
     }
 
-    private void handleStop(CommandSender sender) {
-        if (!plugin.isEnvironmentRunning()) {
-            sender.sendMessage(ChatColor.RED + "Environment is not running.");
-            return;
-        }
-
-        plugin.stopEnvironment();
-        sender.sendMessage(ChatColor.YELLOW + "RL environment stopped.");
-    }
-
-    private void handleStatus(CommandSender sender) {
-        if (!plugin.isEnvironmentRunning()) {
-            sender.sendMessage(ChatColor.RED + "Environment is not running.");
-            return;
-        }
-
-        EpisodeStats stats = plugin.getEpisodeStats();
-        if (stats == null) {
-            sender.sendMessage(ChatColor.YELLOW + "No stats available yet.");
-            return;
-        }
-
-        sender.sendMessage(ChatColor.AQUA + "RL Environment Status:");
-        sender.sendMessage(ChatColor.GRAY + "  Episodes: " + ChatColor.WHITE + stats.episodesCompleted());
-        sender.sendMessage(ChatColor.GRAY + "  Successes: " + ChatColor.GREEN + stats.successCount());
-        sender.sendMessage(ChatColor.GRAY + "  Failures: " + ChatColor.RED + stats.failureCount());
-        sender.sendMessage(ChatColor.GRAY + "  Avg Reward: " + ChatColor.WHITE + String.format("%.3f", stats.averageReward()));
-        sender.sendMessage(ChatColor.GRAY + "  Steps per tick: " + ChatColor.WHITE + stats.stepsPerTick());
-    }
-
-    private void handleShowArena(CommandSender sender) {
+    private void handleProgression(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(ChatColor.RED + "Only players can view the arena outline.");
-            return;
-        }
-        if (!plugin.isEnvironmentRunning()) {
-            sender.sendMessage(ChatColor.RED + "Environment is not running.");
+            sender.sendMessage(ChatColor.RED + "Only players can use progression.");
             return;
         }
 
-        plugin.showArena(player);
-    }
-
-    private void handleSpeed(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "Usage: /rlenv speed <stepsPerTick>");
+            sender.sendMessage(ChatColor.RED + "Usage: /rlenv progression <start|next|stop>");
             return;
         }
 
-        if (!plugin.isEnvironmentRunning()) {
-            sender.sendMessage(ChatColor.RED + "Environment is not running.");
-            return;
+        switch (args[1].toLowerCase()) {
+            case "start" -> {
+                plugin.getProgressionManager().start(player);
+                sender.sendMessage(ChatColor.GREEN + "Progression started (Level 1).");
+            }
+            case "next" -> {
+                plugin.getProgressionManager().next(player);
+                sender.sendMessage(ChatColor.GREEN + "Advanced progression to Level " + (plugin.getProgressionManager().getLevelIndex() + 1) + ".");
+            }
+            case "stop" -> {
+                plugin.getProgressionManager().stop();
+                sender.sendMessage(ChatColor.YELLOW + "Progression stopped and room restored.");
+            }
+            default -> sender.sendMessage(ChatColor.RED + "Usage: /rlenv progression <start|next|stop>");
         }
-
-        double sps;
-        try {
-            sps = Double.parseDouble(args[1]);
-        } catch (NumberFormatException e) {
-            sender.sendMessage(ChatColor.RED + "Speed must be a number (e.g., 0.5, 1, 10, 200).");
-            return;
-        }
-        plugin.setEnvironmentSpeed(sps);
-        sender.sendMessage(ChatColor.GREEN + "Environment speed set to " + sps + " steps/sec.");
     }
 
     private void sendUsage(CommandSender sender) {
-        sender.sendMessage(ChatColor.AQUA + "Usage: /rlenv <start|stop|status|showarena|speed>");
+        sender.sendMessage(ChatColor.AQUA + "Usage: /rlenv <start|stop|status|showarena|speed|graph|progression>");
     }
 }

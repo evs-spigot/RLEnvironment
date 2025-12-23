@@ -40,6 +40,10 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
     private final float particleSize = 0.45f;
     private boolean enabled = true;
 
+    private final double[] epsSeries = new double[512];
+    private int epsCount = 0;
+
+
     public ProgressGraphVisualizer(Player viewer, Location origin) {
         this.viewer = viewer;
         this.origin = origin.clone();
@@ -71,6 +75,16 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
                 history.clear();
                 history.addAll(compressed);
             }
+        }
+    }
+
+    public void addEpsilonPoint(double eps) {
+        if (epsCount < epsSeries.length) {
+            epsSeries[epsCount++] = clamp01(eps);
+        } else {
+            // rolling
+            System.arraycopy(epsSeries, 1, epsSeries, 0, epsSeries.length - 1);
+            epsSeries[epsSeries.length - 1] = clamp01(eps);
         }
     }
 
@@ -174,5 +188,9 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
 
     private double clamp(double v, double min, double max) {
         return Math.max(min, Math.min(max, v));
+    }
+
+    private double clamp01(double v) {
+        return clamp(v, 0.0, 1.0);
     }
 }

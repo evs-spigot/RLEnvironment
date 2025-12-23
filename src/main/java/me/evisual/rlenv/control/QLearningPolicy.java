@@ -27,15 +27,27 @@ public class QLearningPolicy implements Policy {
     private final double timePenaltySlope;  // grows with step index: penalty += slope * stepIndex
     private int stepIndexInEpisode = 0;
 
+    // Improvements
+    private final double optimisticInit;    // initial Q value for unseen states
+    private final boolean useActionMasking; // respect blocked bits if available
+    private final double qMin, qMax;        // clamp Q values for stability
+
+    // Adaptive epsilon
+    private double adaptiveBoost = 0.0;          // added on top of schedule
+    private double targetRecentSuccess = 0.90;   // try to keep recent success around this
+    private double boostStrength = 0.60;         // how hard we push epsilon up when struggling
+    private double boostSmoothing = 0.15;        // 0..1, higher reacts faster
+    private double maxAdaptiveBoost = 0.60;      // cap extra exploration
+
     public QLearningPolicy() {
-        // Good defaults for a small gridworld-ish environment
         this(
                 0.20, 0.95,
                 0.60, 0.03, 600,
-                0.00, 0.01 // prev 0.002
+                0.00, 0.01,      // time shaping (current slope)
+                1.0,             // optimistic init (helps get moving toward goal sooner)
+                true,            // action masking if blocked bits exist
+                -100.0, 100.0    // Q clamp
         );
-        // timePenaltyBase = 0.00 means "only increasing penalty"
-        // timePenaltySlope = 0.002: by step 200 penalty ~ 0.4 additional (noticeable but not insane)
     }
 
     public QLearningPolicy(double alpha,
@@ -44,7 +56,11 @@ public class QLearningPolicy implements Policy {
                            double epsilonEnd,
                            long epsilonDecayEpisodes,
                            double timePenaltyBase,
-                           double timePenaltySlope) {
+                           double timePenaltySlope,
+                           double optimisticInit,
+                           boolean useActionMasking,
+                           double qMin,
+                           double qMax) {
         this.alpha = alpha;
         this.gamma = gamma;
         this.epsilonStart = epsilonStart;
@@ -52,19 +68,26 @@ public class QLearningPolicy implements Policy {
         this.epsilonDecayEpisodes = Math.max(1, epsilonDecayEpisodes);
         this.timePenaltyBase = Math.max(0.0, timePenaltyBase);
         this.timePenaltySlope = Math.max(0.0, timePenaltySlope);
+
+        this.optimisticInit = optimisticInit;
+        this.useActionMasking = useActionMasking;
+        this.qMin = qMin;
+        this.qMax = qMax;
     }
 
     @Override
     public Action chooseAction(Observation observation) {
         String key = toStateKey(observation);
-        double[] qValues = q.computeIfAbsent(key, k -> new double[Action.values().length]);
+        double[] qValues = q.computeIfAbsent(key, k -> createInitialQ());
 
-        double eps = currentEpsilon();
+        double eps = effectiveEpsilon();
+
+        // Epsilon-greedy exploration (random valid action)
         if (rng.nextDouble() < eps) {
-            return randomAction();
+            return randomValidAction(observation);
         }
 
-        int bestIdx = argMax(qValues);
+        int bestIdx = argMaxWithTies(qValues, observation);
         return Action.values()[bestIdx];
     }
 
@@ -75,22 +98,24 @@ public class QLearningPolicy implements Policy {
                                   Observation nextState,
                                   boolean done) {
 
-        // stepIndexInEpisode starts at 0, increments each transition
+        // Increasing time cost (stronger pressure for shortest path)
         double timePenalty = timePenaltyBase + (timePenaltySlope * stepIndexInEpisode);
         double shapedReward = reward - timePenalty;
 
         String sKey = toStateKey(state);
         String s2Key = toStateKey(nextState);
 
-        double[] qs = q.computeIfAbsent(sKey, k -> new double[Action.values().length]);
-        double[] qs2 = q.computeIfAbsent(s2Key, k -> new double[Action.values().length]);
+        double[] qs = q.computeIfAbsent(sKey, k -> createInitialQ());
+        double[] qs2 = q.computeIfAbsent(s2Key, k -> createInitialQ());
 
         int a = action.ordinal();
 
-        double maxNext = done ? 0.0 : qs2[argMax(qs2)];
+        // If next state has blocked actions, ignore them when computing max
+        double maxNext = done ? 0.0 : maxQ(qs2, nextState);
+
         double target = shapedReward + gamma * maxNext;
 
-        qs[a] = qs[a] + alpha * (target - qs[a]);
+        qs[a] = clamp(qs[a] + alpha * (target - qs[a]));
 
         stepIndexInEpisode++;
 
@@ -102,25 +127,147 @@ public class QLearningPolicy implements Policy {
 
     @Override
     public void onEpisodeEnd() {
-        // Safety reset (in case something ends an episode without calling observeTransition(done=true))
         stepIndexInEpisode = 0;
     }
 
-    private Action randomAction() {
-        Action[] actions = Action.values();
-        return actions[rng.nextInt(actions.length)];
+    // -----------------------------
+    // Exposed stats (for /rlenv status)
+    // -----------------------------
+
+    public double getEpsilon() {
+        return effectiveEpsilon();
     }
 
-    private int argMax(double[] arr) {
-        int best = 0;
-        double bestVal = arr[0];
-        for (int i = 1; i < arr.length; i++) {
-            if (arr[i] > bestVal) {
-                bestVal = arr[i];
+    public int getStateCount() {
+        return q.size();
+    }
+
+    public long getEpisodesSeen() {
+        return episodesSeen;
+    }
+
+    public int getStepIndexInEpisode() {
+        return stepIndexInEpisode;
+    }
+
+    // -----------------------------
+    // Internals
+    // -----------------------------
+
+    private double[] createInitialQ() {
+        double[] arr = new double[Action.values().length];
+        for (int i = 0; i < arr.length; i++) arr[i] = optimisticInit;
+        return arr;
+    }
+
+    private Action randomValidAction(Observation obs) {
+        // If we have blocked bits, avoid choosing blocked moves
+        boolean[] blocked = useActionMasking ? extractBlocked(obs) : null;
+
+        // Build a small list of allowed actions (no allocations: try a few times then fallback)
+        for (int tries = 0; tries < 12; tries++) {
+            Action a = Action.values()[rng.nextInt(Action.values().length)];
+            if (a == Action.STAY) return a; // always valid
+            if (blocked == null) return a;
+
+            if (a == Action.MOVE_NORTH && !blocked[0]) return a;
+            if (a == Action.MOVE_SOUTH && !blocked[1]) return a;
+            if (a == Action.MOVE_EAST  && !blocked[2]) return a;
+            if (a == Action.MOVE_WEST  && !blocked[3]) return a;
+        }
+
+        // Fallback: pick first unblocked move; else stay
+        if (blocked != null) {
+            if (!blocked[0]) return Action.MOVE_NORTH;
+            if (!blocked[1]) return Action.MOVE_SOUTH;
+            if (!blocked[2]) return Action.MOVE_EAST;
+            if (!blocked[3]) return Action.MOVE_WEST;
+        }
+        return Action.STAY;
+    }
+
+    private int argMaxWithTies(double[] arr, Observation obs) {
+        boolean[] blocked = useActionMasking ? extractBlocked(obs) : null;
+
+        int best = -1;
+        double bestVal = -Double.MAX_VALUE;
+        int ties = 0;
+
+        for (int i = 0; i < arr.length; i++) {
+            Action a = Action.values()[i];
+
+            if (blocked != null && isMoveBlocked(a, blocked)) {
+                continue;
+            }
+
+            double v = arr[i];
+            if (v > bestVal) {
+                bestVal = v;
                 best = i;
+                ties = 1;
+            } else if (v == bestVal && best != -1) {
+                // random tie break
+                ties++;
+                if (rng.nextInt(ties) == 0) best = i;
             }
         }
+
+        // If all moves blocked (rare), allow STAY
+        if (best == -1) return Action.STAY.ordinal();
         return best;
+    }
+
+    private double maxQ(double[] qValues, Observation nextState) {
+        boolean[] blocked = useActionMasking ? extractBlocked(nextState) : null;
+
+        double best = -Double.MAX_VALUE;
+        boolean found = false;
+
+        for (int i = 0; i < qValues.length; i++) {
+            Action a = Action.values()[i];
+            if (blocked != null && isMoveBlocked(a, blocked)) continue;
+
+            best = Math.max(best, qValues[i]);
+            found = true;
+        }
+
+        return found ? best : 0.0;
+    }
+
+    private boolean isMoveBlocked(Action a, boolean[] blocked) {
+        return (a == Action.MOVE_NORTH && blocked[0])
+                || (a == Action.MOVE_SOUTH && blocked[1])
+                || (a == Action.MOVE_EAST  && blocked[2])
+                || (a == Action.MOVE_WEST  && blocked[3]);
+    }
+
+    /**
+     * Extract "blocked" bits if observation includes them.
+     *
+     * Supports both:
+     * - GoldCollectorEnvironment observation: dx,dz,dy,dist, blockedN,blockedS,blockedE,blockedW
+     * - Progression observation: dx,dz,dist (no blocked bits)
+     */
+    private boolean[] extractBlocked(Observation obs) {
+        double[] f = obs.getFeatures();
+
+        // If it's the short progression observation, no blocking info
+        // progression: [dx, dz, dist] -> length 3
+        if (f.length < 8) return null;
+
+        // assume layout: ... then 4 blocked bits at the end or starting at index 4
+        // In your GoldCollectorEnvironment earlier: indexes 4..7 were blocked
+        int start = 4;
+        if (f.length >= 8) {
+            return new boolean[] {
+                    f[start] >= 0.5,
+                    f[start + 1] >= 0.5,
+                    f[start + 2] >= 0.5,
+                    f[start + 3] >= 0.5
+            };
+        }
+
+        return null;
     }
 
     private double currentEpsilon() {
@@ -128,42 +275,45 @@ public class QLearningPolicy implements Policy {
         return epsilonStart + t * (epsilonEnd - epsilonStart);
     }
 
+    private double clamp(double v) {
+        if (v < qMin) return qMin;
+        if (v > qMax) return qMax;
+        return v;
+    }
+
     /**
-     * This matches the newer observation format (direction + distance bins + bits)
-     *
-     * Expected layout (from your improved environment):
-     * 0 dxSign (-1,0,1)
-     * 1 dzSign (-1,0,1)
-     * 2 dySign (-1,0,1)  (if present)
-     * 3 normDist (0..~1)
-     * 4.. bits (blocked/hazard/etc)
+     * State key that works for both of your environments:
+     * - Progression: [dx, dz, dist]
+     * - GoldCollector: [dx, dz, dy, dist, blocked...]
      */
     private String toStateKey(Observation obs) {
         double[] f = obs.getFeatures();
 
-        // Handle either layout:
-        // If dySign: dx, dz, dy, dist...
-        // If not: dx, dz, dist...
         int idx = 0;
 
         int dx = clampInt((int) Math.round(f[idx++]), -1, 1);
         int dz = clampInt((int) Math.round(f[idx++]), -1, 1);
 
-        // If there is a third sign feature (dy), include it; otherwise treat as 0
         int dy = 0;
-        if (f.length >= 4) {
+        // If we have >=4, assume dx,dz,dy,dist
+        // If we have 3, assume dx,dz,dist
+        boolean hasDy = f.length >= 4;
+        if (hasDy) {
             dy = clampInt((int) Math.round(f[idx++]), -1, 1);
         }
 
         double distVal = f[idx++];
-        int distBin = (int) Math.floor(clamp01(distVal) * 6.0);
-        if (distBin >= 6) distBin = 5;
+        int distBin = (int) Math.floor(clamp01(distVal) * 8.0); // finer bins than 6
+        if (distBin >= 8) distBin = 7;
 
-        StringBuilder sb = new StringBuilder(48);
+        StringBuilder sb = new StringBuilder(64);
         sb.append(dx).append(',').append(dz).append(',').append(dy).append(',').append(distBin);
 
-        for (int i = idx; i < f.length; i++) {
-            sb.append(',').append(f[i] >= 0.5 ? 1 : 0);
+        // Include blocked bits if present (helps state discrimination)
+        if (f.length >= 8) {
+            for (int i = 4; i < Math.min(f.length, 8); i++) {
+                sb.append(',').append(f[i] >= 0.5 ? 1 : 0);
+            }
         }
 
         return sb.toString();
@@ -175,5 +325,23 @@ public class QLearningPolicy implements Policy {
 
     private int clampInt(int v, int min, int max) {
         return Math.max(min, Math.min(max, v));
+    }
+
+    private double effectiveEpsilon() {
+        // Scheduled decay + adaptive boost, clamped to [epsilonEnd, 1.0]
+        double eps = currentEpsilon() + adaptiveBoost;
+        if (eps < epsilonEnd) eps = epsilonEnd;
+        if (eps > 1.0) eps = 1.0;
+        return eps;
+    }
+
+    public void updatePerformance(double recentSuccessRate) {
+        // If performance is below target, increase boost; if above, decay boost.
+        double error = (targetRecentSuccess - recentSuccessRate); // positive => struggling
+        double desiredBoost = clamp01(error * boostStrength);     // 0..boostStrength
+        desiredBoost = Math.min(desiredBoost, maxAdaptiveBoost);
+
+        // Smooth so it doesn't jitter
+        adaptiveBoost = adaptiveBoost + boostSmoothing * (desiredBoost - adaptiveBoost);
     }
 }

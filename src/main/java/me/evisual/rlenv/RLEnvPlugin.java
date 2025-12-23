@@ -5,7 +5,9 @@ import me.evisual.rlenv.control.*;
 import me.evisual.rlenv.env.RLEnvironment;
 import me.evisual.rlenv.env.goldcollector.ArenaConfig;
 import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
+import me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment;
 import me.evisual.rlenv.logging.TransitionLogger;
+import me.evisual.rlenv.progression.ProgressionManager;
 import me.evisual.rlenv.visual.AgentVisualizer;
 import me.evisual.rlenv.visual.ArenaVisualizer;
 import me.evisual.rlenv.visual.GraphMode;
@@ -14,6 +16,7 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.util.Vector;
 
 import java.io.File;
 
@@ -25,6 +28,8 @@ public class RLEnvPlugin extends JavaPlugin {
     private ProgressGraphVisualizer graphVisualizer;
     private boolean graphEnabled = true;
 
+    private ProgressionManager progressionManager;
+
     @Override
     public void onEnable() {
         if (getCommand("rlenv") != null) {
@@ -33,6 +38,8 @@ public class RLEnvPlugin extends JavaPlugin {
         if (!getDataFolder().exists()) {
             getDataFolder().mkdirs();
         }
+
+        progressionManager = new ProgressionManager(this);
         getLogger().info("RLEnvPlugin enabled");
     }
 
@@ -167,5 +174,52 @@ public class RLEnvPlugin extends JavaPlugin {
     public GraphMode getGraphMode() {
         if (graphVisualizer == null) return null;
         return graphVisualizer.getMode();
+    }
+
+    public ArenaConfig createArenaConfigNearPlayer(Player player) {
+        Location loc = player.getLocation();
+        World world = loc.getWorld();
+
+        int radiusX = 5; // interior is 11 wide (min..max inclusive)
+        int radiusZ = 5;
+
+        // Put the room in front of the player so they are OUTSIDE looking in
+        Vector dir = loc.getDirection().setY(0).normalize();
+        int forward = 10; // how far ahead the room center is
+
+        int centerX = loc.getBlockX() + (int) Math.round(dir.getX() * forward);
+        int centerZ = loc.getBlockZ() + (int) Math.round(dir.getZ() * forward);
+
+        int minX = centerX - radiusX;
+        int maxX = centerX + radiusX;
+        int minZ = centerZ - radiusZ;
+        int maxZ = centerZ + radiusZ;
+
+        // Floor level (room floor)
+        int y = loc.getBlockY() - 1;
+
+        int maxStepsPerEpisode = 300;
+
+        return new ArenaConfig(world, minX, maxX, minZ, maxZ, y, maxStepsPerEpisode);
+    }
+
+    public void startEnvironmentWithCustomEnv(Player player, RLEnvironment env) {
+        // Stop any existing environment cleanly
+        stopEnvironment();
+
+        // Use existing logger/policy/visualizer creation
+        this.environment = env;
+
+        this.transitionLogger = new TransitionLogger(getDataFolder());
+
+        Policy policy = new QLearningPolicy();
+        AgentVisualizer visualizer = new AgentVisualizer(this, ((ProgressionGoldEnvironment) env).getConfig());
+
+        this.episodeRunner = new EpisodeRunner(environment, transitionLogger, policy, visualizer, graphVisualizer);
+        this.episodeRunner.runTaskTimer(this, 0L, 1L);
+    }
+
+    public ProgressionManager getProgressionManager() {
+        return progressionManager;
     }
 }

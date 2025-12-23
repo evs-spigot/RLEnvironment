@@ -29,14 +29,11 @@ public class EpisodeRunner extends BukkitRunnable {
     private int maxStepsPerTick = 200;
 
     private long episodesCompleted = 0;
-    private long successCount = 0;
-    private long failureCount = 0;
-    private double totalRewardSum = 0.0;
 
     private double currentEpisodeReward = 0.0;
     private int stepsThisEpisode = 0;
 
-    // Moving average window (for "learning curve")
+    // Reward moving average (kept for graph)
     private final double[] rewardWindow = new double[50];
     private int rewardWindowSize = 0;
     private int rewardWindowIndex = 0;
@@ -44,6 +41,22 @@ public class EpisodeRunner extends BukkitRunnable {
 
     // Graph sampling: push one point every N episodes (helps performance at high speed)
     private final int graphSampleEveryEpisodes = 5;
+
+    // ✅ Learning / improvement stats
+    private long startMillis = System.currentTimeMillis();
+
+    private long successCount = 0;
+    private long failureCount = 0;
+
+    private long totalStepsToGoal = 0; // only counts successful episodes
+    private int bestStepsToGoal = Integer.MAX_VALUE;
+
+    // Recent window metrics (shows improvement over time)
+    private static final int RECENT_WINDOW = 50;
+    private final boolean[] recentSuccess = new boolean[RECENT_WINDOW];
+    private final int[] recentStepsToGoal = new int[RECENT_WINDOW]; // -1 for failures
+    private int recentSize = 0;
+    private int recentIndex = 0;
 
     public EpisodeRunner(RLEnvironment environment,
                          TransitionLogger logger,
@@ -76,15 +89,12 @@ public class EpisodeRunner extends BukkitRunnable {
 
         int stepsToRun = (int) Math.floor(stepAccumulator);
         if (stepsToRun <= 0) {
-            // Still update visuals even if we didn't step
             updateVisualizer();
             return;
         }
 
-        // Consume accumulator
         stepAccumulator -= stepsToRun;
 
-        // Cap steps for safety
         if (stepsToRun > maxStepsPerTick) {
             stepsToRun = maxStepsPerTick;
         }
@@ -132,12 +142,29 @@ public class EpisodeRunner extends BukkitRunnable {
 
     private void finishEpisode(StepResult lastStep) {
         episodesCompleted++;
-        totalRewardSum += currentEpisodeReward;
 
-        if (lastStep.getReward() > 0) successCount++;
-        else failureCount++;
+        boolean success = lastStep.getReward() > 0.0;
 
-        // sliding window
+        if (success) {
+            successCount++;
+            totalStepsToGoal += stepsThisEpisode;
+            if (stepsThisEpisode < bestStepsToGoal) bestStepsToGoal = stepsThisEpisode;
+
+            // ✅ obvious “hit” indicator
+            if (visualizer != null) {
+                visualizer.onGoalHit();
+            }
+        } else {
+            failureCount++;
+        }
+
+        // recent ring buffer
+        if (recentSize < RECENT_WINDOW) recentSize++;
+        recentSuccess[recentIndex] = success;
+        recentStepsToGoal[recentIndex] = success ? stepsThisEpisode : -1;
+        recentIndex = (recentIndex + 1) % RECENT_WINDOW;
+
+        // reward window (for graph)
         if (rewardWindowSize < rewardWindow.length) {
             rewardWindow[rewardWindowIndex] = currentEpisodeReward;
             rewardWindowSum += currentEpisodeReward;
@@ -150,18 +177,33 @@ public class EpisodeRunner extends BukkitRunnable {
             rewardWindowIndex = (rewardWindowIndex + 1) % rewardWindow.length;
         }
 
-        double movingAvg = rewardWindowSum / Math.max(1, rewardWindowSize);
+        double movingAvgReward = rewardWindowSum / Math.max(1, rewardWindowSize);
 
         if (graph != null && (episodesCompleted % graphSampleEveryEpisodes == 0)) {
-            graph.addAvgRewardPoint(movingAvg);
+            graph.addAvgRewardPoint(movingAvgReward);
+
+            if (policy instanceof QLearningPolicy qlp) {
+                graph.addEpsilonPoint(qlp.getEpsilon());
+            }
+        }
+
+        // Feed adaptive epsilon with recent performance
+        if (policy instanceof QLearningPolicy qlp) {
+            qlp.updatePerformance(recentSuccessRate());
         }
     }
 
     private void updateVisualizer() {
         if (visualizer == null) return;
 
-        if (environment instanceof GoldCollectorEnvironment env) {
+        if (environment instanceof me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment env) {
             visualizer.updatePosition(env.getAgentX(), env.getAgentY(), env.getAgentZ());
+            return;
+        }
+
+        if (environment instanceof me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment env) {
+            int y = env.getConfig().y() + 1;
+            visualizer.updatePosition(env.getAgentX(), y, env.getAgentZ());
         }
     }
 
@@ -173,7 +215,6 @@ public class EpisodeRunner extends BukkitRunnable {
     }
 
     public void setStepsPerSecond(double stepsPerSecond) {
-        // allow very slow, and very fast
         if (stepsPerSecond < 0.1) stepsPerSecond = 0.1;   // 1 step every 10 seconds
         if (stepsPerSecond > 2000) stepsPerSecond = 2000; // safety
         this.stepsPerSecond = stepsPerSecond;
@@ -183,14 +224,51 @@ public class EpisodeRunner extends BukkitRunnable {
         return stepsPerSecond;
     }
 
+    private double recentSuccessRate() {
+        if (recentSize == 0) return 0.0;
+        int wins = 0;
+        for (int i = 0; i < recentSize; i++) if (recentSuccess[i]) wins++;
+        return wins / (double) recentSize;
+    }
+
+    private double recentAvgStepsToGoal() {
+        int count = 0;
+        int sum = 0;
+        for (int i = 0; i < recentSize; i++) {
+            int v = recentStepsToGoal[i];
+            if (v >= 0) { sum += v; count++; }
+        }
+        return count == 0 ? 0.0 : (sum / (double) count);
+    }
+
     public EpisodeStats snapshotStats() {
-        double avgReward = episodesCompleted > 0 ? totalRewardSum / episodesCompleted : 0.0;
+        double overallSuccessRate = episodesCompleted == 0 ? 0.0 : (successCount / (double) episodesCompleted);
+        double overallAvgStepsToGoal = successCount == 0 ? 0.0 : (totalStepsToGoal / (double) successCount);
+
+        long elapsed = Math.max(1, System.currentTimeMillis() - startMillis);
+        double episodesPerMinute = (episodesCompleted * 60000.0) / elapsed;
+
+        // Optional policy stats (if your QLearningPolicy exposes them)
+        double epsilon = -1.0;
+        int stateCount = -1;
+        if (policy instanceof QLearningPolicy qlp) {
+            epsilon = qlp.getEpsilon();
+            stateCount = qlp.getStateCount();
+        }
+
         return new EpisodeStats(
                 episodesCompleted,
                 successCount,
                 failureCount,
-                avgReward,
-                (int) Math.round(stepsPerSecond)
+                overallSuccessRate,
+                recentSuccessRate(),
+                overallAvgStepsToGoal,
+                recentAvgStepsToGoal(),
+                bestStepsToGoal == Integer.MAX_VALUE ? -1 : bestStepsToGoal,
+                episodesPerMinute,
+                epsilon,
+                stateCount,
+                stepsPerSecond
         );
     }
 }
