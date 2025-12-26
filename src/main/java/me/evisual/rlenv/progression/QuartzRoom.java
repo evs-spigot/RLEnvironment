@@ -21,9 +21,9 @@ public class QuartzRoom {
 
     /**
      * Builds a 10-block tall room around the arena bounds.
-     * Floor/ceiling/walls are QUARTZ_BLOCK except one wall of GLASS.
+     * Floor/ceiling/walls are QUARTZ_BLOCK except one wall of BARRIER.
      *
-     * Glass wall -- NORTH (minZ side).
+     * Barrier wall -- NORTH (minZ side).
      */
     public void build() {
         World w = arena.world();
@@ -65,8 +65,8 @@ public class QuartzRoom {
         // Walls
         for (int y = y0 + 1; y <= y1 - 1; y++) {
             for (int x = wallMinX; x <= wallMaxX; x++) {
-                // NORTH wall (glass)
-                set(w, x, y, wallMinZ, Material.GLASS);
+                // NORTH wall (barrier)
+                set(w, x, y, wallMinZ, Material.BARRIER);
                 // SOUTH wall (quartz)
                 set(w, x, y, wallMaxZ, Material.QUARTZ_BLOCK);
             }

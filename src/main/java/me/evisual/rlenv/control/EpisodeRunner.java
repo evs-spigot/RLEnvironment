@@ -41,6 +41,8 @@ public class EpisodeRunner extends BukkitRunnable {
 
     // Graph sampling: push one point every N episodes (helps performance at high speed)
     private final int graphSampleEveryEpisodes = 5;
+    private final int resetDelayTicks = 8;
+    private int resetCooldownTicks = 0;
 
     // ✅ Learning / improvement stats
     private long startMillis = System.currentTimeMillis();
@@ -77,6 +79,17 @@ public class EpisodeRunner extends BukkitRunnable {
     public void run() {
         if (closed) {
             cancel();
+            return;
+        }
+
+        if (resetCooldownTicks > 0) {
+            resetCooldownTicks--;
+            if (resetCooldownTicks == 0) {
+                currentObservation = environment.reset();
+                currentEpisodeReward = 0.0;
+                stepsThisEpisode = 0;
+                teleportVisualizerToCurrent();
+            }
             return;
         }
 
@@ -125,22 +138,21 @@ public class EpisodeRunner extends BukkitRunnable {
             );
 
             currentObservation = result.getObservation();
-            updateVisualizer();
 
             if (result.isDone()) {
-                finishEpisode(result);
+                boolean success = finishEpisode(result);
                 policy.onEpisodeEnd();
-
-                currentObservation = environment.reset();
-                currentEpisodeReward = 0.0;
-                stepsThisEpisode = 0;
-                updateVisualizer();
+                if (success) {
+                    showGoalBreakEffect();
+                }
+                resetCooldownTicks = resetDelayTicks;
                 break;
             }
         }
+        updateVisualizer();
     }
 
-    private void finishEpisode(StepResult lastStep) {
+    private boolean finishEpisode(StepResult lastStep) {
         episodesCompleted++;
 
         boolean success = lastStep.getReward() > 0.0;
@@ -191,6 +203,7 @@ public class EpisodeRunner extends BukkitRunnable {
         if (policy instanceof QLearningPolicy qlp) {
             qlp.updatePerformance(recentSuccessRate());
         }
+        return success;
     }
 
     private void updateVisualizer() {
@@ -204,6 +217,35 @@ public class EpisodeRunner extends BukkitRunnable {
         if (environment instanceof me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment env) {
             int y = env.getConfig().y() + 1;
             visualizer.updatePosition(env.getAgentX(), y, env.getAgentZ());
+        }
+    }
+
+    private void teleportVisualizerToCurrent() {
+        if (visualizer == null) return;
+
+        if (environment instanceof me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment env) {
+            visualizer.teleportTo(env.getAgentX(), env.getAgentY(), env.getAgentZ());
+            return;
+        }
+
+        if (environment instanceof me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment env) {
+            int y = env.getConfig().y() + 1;
+            visualizer.teleportTo(env.getAgentX(), y, env.getAgentZ());
+        }
+    }
+
+    private void showGoalBreakEffect() {
+        if (visualizer == null) return;
+
+        if (environment instanceof me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment env) {
+            int blockY = env.getGoalY() - 1;
+            visualizer.showGoalBreak(env.getGoalX(), blockY, env.getGoalZ());
+            return;
+        }
+
+        if (environment instanceof me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment env) {
+            int blockY = env.getConfig().y() + 1;
+            visualizer.showGoalBreak(env.getGoalX(), blockY, env.getGoalZ());
         }
     }
 

@@ -3,6 +3,7 @@ package me.evisual.rlenv.control;
 import me.evisual.rlenv.env.Action;
 import me.evisual.rlenv.env.Observation;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
@@ -38,6 +39,13 @@ public class QLearningPolicy implements Policy {
     private double boostStrength = 0.60;         // how hard we push epsilon up when struggling
     private double boostSmoothing = 0.15;        // 0..1, higher reacts faster
     private double maxAdaptiveBoost = 0.60;      // cap extra exploration
+    private double epsilonSmoothingEpisode = 0.15; // 0..1, lower = steadier
+
+    private double lastEpsilon = 0.0;
+    private double adaptiveEpsilon = 0.0;
+    private double tempBoost = 0.0;
+    private int tempBoostRemaining = 0;
+    private double tempBoostStep = 0.0;
 
     public QLearningPolicy() {
         this(
@@ -73,6 +81,9 @@ public class QLearningPolicy implements Policy {
         this.useActionMasking = useActionMasking;
         this.qMin = qMin;
         this.qMax = qMax;
+
+        this.adaptiveEpsilon = epsilonStart;
+        this.lastEpsilon = epsilonStart;
     }
 
     @Override
@@ -81,6 +92,7 @@ public class QLearningPolicy implements Policy {
         double[] qValues = q.computeIfAbsent(key, k -> createInitialQ());
 
         double eps = effectiveEpsilon();
+        lastEpsilon = eps;
 
         // Epsilon-greedy exploration (random valid action)
         if (rng.nextDouble() < eps) {
@@ -135,7 +147,7 @@ public class QLearningPolicy implements Policy {
     // -----------------------------
 
     public double getEpsilon() {
-        return effectiveEpsilon();
+        return lastEpsilon > 0.0 ? lastEpsilon : effectiveEpsilon();
     }
 
     public int getStateCount() {
@@ -156,7 +168,7 @@ public class QLearningPolicy implements Policy {
 
     private double[] createInitialQ() {
         double[] arr = new double[Action.values().length];
-        for (int i = 0; i < arr.length; i++) arr[i] = optimisticInit;
+        Arrays.fill(arr, optimisticInit);
         return arr;
     }
 
@@ -177,12 +189,10 @@ public class QLearningPolicy implements Policy {
         }
 
         // Fallback: pick first unblocked move; else stay
-        if (blocked != null) {
-            if (!blocked[0]) return Action.MOVE_NORTH;
-            if (!blocked[1]) return Action.MOVE_SOUTH;
-            if (!blocked[2]) return Action.MOVE_EAST;
-            if (!blocked[3]) return Action.MOVE_WEST;
-        }
+        if (!blocked[0]) return Action.MOVE_NORTH;
+        if (!blocked[1]) return Action.MOVE_SOUTH;
+        if (!blocked[2]) return Action.MOVE_EAST;
+        if (!blocked[3]) return Action.MOVE_WEST;
         return Action.STAY;
     }
 
@@ -243,7 +253,7 @@ public class QLearningPolicy implements Policy {
 
     /**
      * Extract "blocked" bits if observation includes them.
-     *
+     * <p>
      * Supports both:
      * - GoldCollectorEnvironment observation: dx,dz,dy,dist, blockedN,blockedS,blockedE,blockedW
      * - Progression observation: dx,dz,dist (no blocked bits)
@@ -258,16 +268,13 @@ public class QLearningPolicy implements Policy {
         // assume layout: ... then 4 blocked bits at the end or starting at index 4
         // In your GoldCollectorEnvironment earlier: indexes 4..7 were blocked
         int start = 4;
-        if (f.length >= 8) {
-            return new boolean[] {
-                    f[start] >= 0.5,
-                    f[start + 1] >= 0.5,
-                    f[start + 2] >= 0.5,
-                    f[start + 3] >= 0.5
-            };
-        }
+        return new boolean[]{
+                f[start] >= 0.5,
+                f[start + 1] >= 0.5,
+                f[start + 2] >= 0.5,
+                f[start + 3] >= 0.5
+        };
 
-        return null;
     }
 
     private double currentEpsilon() {
@@ -277,8 +284,16 @@ public class QLearningPolicy implements Policy {
 
     private double clamp(double v) {
         if (v < qMin) return qMin;
-        if (v > qMax) return qMax;
-        return v;
+        return Math.min(v, qMax);
+    }
+
+    private double clamp(double v, double min, double max) {
+        return Math.max(min, Math.min(max, v));
+    }
+
+    private double smoothValue(double current, double target, double smoothing) {
+        double t = clamp01(smoothing);
+        return current + t * (target - current);
     }
 
     /**
@@ -311,7 +326,7 @@ public class QLearningPolicy implements Policy {
 
         // Include blocked bits if present (helps state discrimination)
         if (f.length >= 8) {
-            for (int i = 4; i < Math.min(f.length, 8); i++) {
+            for (int i = 4; i < 8; i++) {
                 sb.append(',').append(f[i] >= 0.5 ? 1 : 0);
             }
         }
@@ -328,10 +343,10 @@ public class QLearningPolicy implements Policy {
     }
 
     private double effectiveEpsilon() {
-        // Scheduled decay + adaptive boost, clamped to [epsilonEnd, 1.0]
-        double eps = currentEpsilon() + adaptiveBoost;
+        // Performance-driven epsilon that can drop faster if success improves.
+        double eps = adaptiveEpsilon + adaptiveBoost + tempBoost;
         if (eps < epsilonEnd) eps = epsilonEnd;
-        if (eps > 1.0) eps = 1.0;
+        if (eps > epsilonStart) eps = epsilonStart;
         return eps;
     }
 
@@ -343,5 +358,30 @@ public class QLearningPolicy implements Policy {
 
         // Smooth so it doesn't jitter
         adaptiveBoost = adaptiveBoost + boostSmoothing * (desiredBoost - adaptiveBoost);
+
+        // Performance-driven epsilon: higher success => lower epsilon.
+        double epsTarget = epsilonEnd + (epsilonStart - epsilonEnd) * (1.0 - clamp01(recentSuccessRate));
+        adaptiveEpsilon = smoothValue(adaptiveEpsilon, epsTarget, epsilonSmoothingEpisode);
+        adaptiveEpsilon = clamp(adaptiveEpsilon, epsilonEnd, epsilonStart);
+
+        if (tempBoostRemaining > 0) {
+            tempBoost = Math.max(0.0, tempBoost - tempBoostStep);
+            tempBoostRemaining--;
+            if (tempBoostRemaining == 0) {
+                tempBoost = 0.0;
+                tempBoostStep = 0.0;
+            }
+        }
+    }
+
+    public void boostEpsilonToAtLeast(double minEpsilon, int decayEpisodes) {
+        double current = lastEpsilon > 0.0 ? lastEpsilon : adaptiveEpsilon;
+        double boost = minEpsilon - current;
+        if (boost <= 0.0) return;
+
+        int episodes = Math.max(1, decayEpisodes);
+        tempBoost = Math.max(tempBoost, boost);
+        tempBoostRemaining = Math.max(tempBoostRemaining, episodes);
+        tempBoostStep = tempBoost / (double) tempBoostRemaining;
     }
 }

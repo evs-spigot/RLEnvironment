@@ -23,6 +23,7 @@ public class ProgressionGoldEnvironment implements RLEnvironment {
     private final boolean randomGoal;
     private final int fixedGoalX, fixedGoalZ;
     private int goalX, goalZ;
+    private boolean hasGoal = false;
 
     private boolean done = false;
     private int steps = 0;
@@ -147,9 +148,11 @@ public class ProgressionGoldEnvironment implements RLEnvironment {
         int goalY = config.y() + 1;
 
         // restore previous goal block (above floor)
-        Block old = world.getBlockAt(goalX, goalY, goalZ);
-        if (old.getType() == goalMaterial) {
-            old.setType(prevGoalMaterial, false);
+        if (hasGoal) {
+            Block old = world.getBlockAt(goalX, goalY, goalZ);
+            if (old.getType() == goalMaterial) {
+                old.setType(prevGoalMaterial, false);
+            }
         }
 
         // place new goal block (above floor)
@@ -159,6 +162,7 @@ public class ProgressionGoldEnvironment implements RLEnvironment {
 
         goalX = x;
         goalZ = z;
+        hasGoal = true;
     }
 
     private int manhattan(int x1, int z1, int x2, int z2) {
@@ -170,4 +174,14 @@ public class ProgressionGoldEnvironment implements RLEnvironment {
     public int getGoalX() { return goalX; }
     public int getGoalZ() { return goalZ; }
     public ArenaConfig getConfig() { return config; }
+
+    public void cleanupGoal() {
+        if (!hasGoal) return;
+        int goalY = config.y() + 1;
+        Block old = world.getBlockAt(goalX, goalY, goalZ);
+        if (old.getType() == goalMaterial) {
+            old.setType(prevGoalMaterial, false);
+        }
+        hasGoal = false;
+    }
 }

@@ -63,6 +63,20 @@ public class AgentVisualizer {
         }
     }
 
+    public void teleportTo(int x, int y, int z) {
+        Location t = LocationUtil.centerOfBlock(world, x, y, z);
+        t.setY(t.getY() - 0.35);
+        this.target = t;
+
+        if (zombie == null || zombie.isDead()) {
+            spawnAt(this.target);
+            return;
+        }
+
+        yVel = 0.0;
+        zombie.teleport(this.target);
+    }
+
     private void spawnAt(Location loc) {
         zombie = world.spawn(loc, Zombie.class, z -> {
             z.setBaby(true);
@@ -198,6 +212,33 @@ public class AgentVisualizer {
 
         // quick "blink" to make it super obvious
         zombie.teleport(loc.clone().add(0, 0.35, 0));
+    }
+
+    public void showGoalBreak(int x, int y, int z) {
+        Location loc = LocationUtil.centerOfBlock(world, x, y, z);
+
+        world.spawnParticle(
+                Particle.BLOCK_CRACK,
+                loc,
+                30,
+                0.25, 0.25, 0.25,
+                0.1,
+                Material.GOLD_BLOCK.createBlockData()
+        );
+        world.playSound(loc, Sound.BLOCK_DEEPSLATE_BREAK, 0.8f, 1.1f);
+
+        var block = world.getBlockAt(x, y, z);
+        if (block.getType() == Material.GOLD_BLOCK) {
+            block.setType(Material.AIR, false);
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (block.getType() == Material.AIR) {
+                        block.setType(Material.GOLD_BLOCK, false);
+                    }
+                }
+            }.runTaskLater(plugin, 6L);
+        }
     }
 
     private float yawFromVector(Vector v) {

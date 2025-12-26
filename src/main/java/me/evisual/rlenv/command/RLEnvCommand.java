@@ -55,6 +55,11 @@ public class RLEnvCommand implements CommandExecutor {
             sender.sendMessage(ChatColor.RED + "Environment is not running.");
             return;
         }
+        if (plugin.getProgressionManager().isRunning()) {
+            plugin.getProgressionManager().stop();
+            sender.sendMessage(ChatColor.YELLOW + "Progression stopped and room restored.");
+            return;
+        }
         plugin.stopEnvironment();
         sender.sendMessage(ChatColor.YELLOW + "RL environment stopped.");
     }

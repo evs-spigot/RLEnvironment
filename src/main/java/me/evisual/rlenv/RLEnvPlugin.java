@@ -45,7 +45,11 @@ public class RLEnvPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        stopEnvironment();
+        if (progressionManager != null && progressionManager.isRunning()) {
+            progressionManager.stop();
+        } else {
+            stopEnvironment();
+        }
         getLogger().info("RLEnvPlugin disabled");
     }
 
@@ -203,7 +207,7 @@ public class RLEnvPlugin extends JavaPlugin {
         return new ArenaConfig(world, minX, maxX, minZ, maxZ, y, maxStepsPerEpisode);
     }
 
-    public void startEnvironmentWithCustomEnv(Player player, RLEnvironment env) {
+    public void startEnvironmentWithCustomEnv(Player player, RLEnvironment env, Policy policy) {
         // Stop any existing environment cleanly
         stopEnvironment();
 
@@ -212,7 +216,6 @@ public class RLEnvPlugin extends JavaPlugin {
 
         this.transitionLogger = new TransitionLogger(getDataFolder());
 
-        Policy policy = new QLearningPolicy();
         AgentVisualizer visualizer = new AgentVisualizer(this, ((ProgressionGoldEnvironment) env).getConfig());
 
         this.episodeRunner = new EpisodeRunner(environment, transitionLogger, policy, visualizer, graphVisualizer);
