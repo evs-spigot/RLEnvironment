@@ -35,6 +35,7 @@ public class AgentVisualizer {
 
     // Controlled breaking
     private boolean breakBlocks = true;
+    private boolean allowVerticalMovement = true;
 
     private final Set<Material> breakable = EnumSet.of(
             Material.TALL_GRASS, Material.GRASS, Material.OAK_LEAVES,
@@ -107,17 +108,21 @@ public class AgentVisualizer {
                 Vector horiz = new Vector(delta.getX(), 0, delta.getZ());
                 double dist = horiz.length();
 
-                // Apply simple vertical physics every tick
-                yVel -= gravity;
-                if (yVel < -0.6) yVel = -0.6;
+                if (allowVerticalMovement) {
+                    // Apply simple vertical physics every tick
+                    yVel -= gravity;
+                    if (yVel < -0.6) yVel = -0.6;
+                } else {
+                    yVel = 0.0;
+                }
 
                 if (dist <= stopDistance) {
                     Location snap = cur.clone();
                     snap.setX(target.getX());
                     snap.setZ(target.getZ());
 
-                    double nextY = snap.getY() + yVel;
-                    if (nextY <= target.getY()) {
+                    double nextY = allowVerticalMovement ? (snap.getY() + yVel) : target.getY();
+                    if (allowVerticalMovement && nextY <= target.getY()) {
                         nextY = target.getY();
                         yVel = 0.0;
                     }
@@ -136,17 +141,19 @@ public class AgentVisualizer {
                 Vector step = dir.multiply(Math.min(stepPerTick, dist));
                 Location next = cur.clone().add(step);
 
-                double nextY = next.getY() + yVel;
+                double nextY = allowVerticalMovement ? (next.getY() + yVel) : target.getY();
 
-                double minY = Math.min(target.getY(), next.getY());
-                if (nextY < minY) {
-                    nextY = minY;
-                    yVel = 0.0;
-                }
+                if (allowVerticalMovement) {
+                    double minY = Math.min(target.getY(), next.getY());
+                    if (nextY < minY) {
+                        nextY = minY;
+                        yVel = 0.0;
+                    }
 
-                if (nextY > target.getY() + 1.2) {
-                    nextY = target.getY() + 1.2;
-                    yVel = 0.0;
+                    if (nextY > target.getY() + 1.2) {
+                        nextY = target.getY() + 1.2;
+                        yVel = 0.0;
+                    }
                 }
 
                 next.setY(nextY);
@@ -161,6 +168,8 @@ public class AgentVisualizer {
     }
 
     private void handleObstacles(Location cur, Vector dir) {
+        if (!allowVerticalMovement) return;
+
         int stepX = 0;
         int stepZ = 0;
         if (Math.abs(dir.getX()) > Math.abs(dir.getZ())) stepX = (int) Math.signum(dir.getX());
@@ -249,6 +258,13 @@ public class AgentVisualizer {
 
     public void setBreakBlocks(boolean enabled) {
         this.breakBlocks = enabled;
+    }
+
+    public void setAllowVerticalMovement(boolean enabled) {
+        this.allowVerticalMovement = enabled;
+        if (!enabled) {
+            yVel = 0.0;
+        }
     }
 
     public void setStepPerTick(double s) {

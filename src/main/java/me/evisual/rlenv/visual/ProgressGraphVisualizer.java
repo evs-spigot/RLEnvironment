@@ -3,7 +3,6 @@ package me.evisual.rlenv.visual;
 import org.bukkit.Color;
 import org.bukkit.Location;
 import org.bukkit.Particle;
-import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 
@@ -42,7 +41,6 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
 
     private final double[] epsSeries = new double[512];
     private int epsCount = 0;
-
 
     public ProgressGraphVisualizer(Player viewer, Location origin) {
         this.viewer = viewer;

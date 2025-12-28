@@ -4,7 +4,6 @@ import me.evisual.rlenv.env.Action;
 import me.evisual.rlenv.env.Observation;
 import me.evisual.rlenv.env.RLEnvironment;
 import me.evisual.rlenv.env.StepResult;
-import me.evisual.rlenv.util.BlockUtil;
 import me.evisual.rlenv.util.LocationUtil;
 import me.evisual.rlenv.world.ArenaTerrain;
 import me.evisual.rlenv.world.TerrainSnapshot;
@@ -12,9 +11,7 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 
-import java.util.EnumSet;
 import java.util.Random;
-import java.util.Set;
 
 /**
  * A simple gridworld-like RL environment implemented inside a Minecraft world.
@@ -68,8 +65,7 @@ public class GoldCollectorEnvironment implements RLEnvironment {
         done = false;
         steps = 0;
 
-        // Build “natural” terrain inside the arena once per reset (you can change to only build on start)
-        // If you prefer persistent terrain across episodes, move generate() out of reset() and into plugin start.
+        // Build natural terrain inside the arena once per reset.
         terrain.generate(random.nextLong());
 
         int[] agentPos = sampleRandomTile();
@@ -246,8 +242,7 @@ public class GoldCollectorEnvironment implements RLEnvironment {
         goalZ = z;
         goalY = y;
 
-        // ✅ NEW: Cover the goal sometimes so the agent has to break in
-        // (puts a solid block where the zombie wants to stand)
+        // Occasionally cover the goal so the agent has to break in.
         if (random.nextDouble() < 0.65) {
             Block cover = world.getBlockAt(x, y, z); // standing space
             if (cover.getType() == Material.AIR || cover.isPassable()) {
@@ -255,7 +250,7 @@ public class GoldCollectorEnvironment implements RLEnvironment {
             }
         }
 
-        // ✅ NEW: Add a small 1-block “wall” around goal sometimes (forces jump/break)
+        // Occasionally add a 1-block ring around the goal (forces jump/break).
         if (random.nextDouble() < 0.35) {
             placeGoalRing(x, y, z);
         }

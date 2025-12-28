@@ -4,7 +4,7 @@ import me.evisual.rlenv.env.Action;
 import me.evisual.rlenv.env.Observation;
 import me.evisual.rlenv.env.RLEnvironment;
 import me.evisual.rlenv.env.StepResult;
-import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
+import me.evisual.rlenv.logging.TimingReporter;
 import me.evisual.rlenv.logging.TransitionLogger;
 import me.evisual.rlenv.visual.AgentVisualizer;
 import me.evisual.rlenv.visual.ProgressGraphVisualizer;
@@ -12,11 +12,15 @@ import org.bukkit.scheduler.BukkitRunnable;
 
 public class EpisodeRunner extends BukkitRunnable {
 
+    public static final double MIN_STEPS_PER_SECOND = 0.1;
+
+    private final double maxStepsPerSecond;
     private final RLEnvironment environment;
     private final TransitionLogger logger;
     private final Policy policy;
     private final AgentVisualizer visualizer;
     private final ProgressGraphVisualizer graph;
+    private final TimingReporter timingReporter;
 
     private Observation currentObservation;
     private boolean closed = false;
@@ -44,7 +48,7 @@ public class EpisodeRunner extends BukkitRunnable {
     private final int resetDelayTicks = 8;
     private int resetCooldownTicks = 0;
 
-    // ✅ Learning / improvement stats
+    // Learning / improvement stats
     private long startMillis = System.currentTimeMillis();
 
     private long successCount = 0;
@@ -64,12 +68,16 @@ public class EpisodeRunner extends BukkitRunnable {
                          TransitionLogger logger,
                          Policy policy,
                          AgentVisualizer visualizer,
-                         ProgressGraphVisualizer graph) {
+                         ProgressGraphVisualizer graph,
+                         TimingReporter timingReporter,
+                         double maxStepsPerSecond) {
         this.environment = environment;
         this.logger = logger;
         this.policy = policy;
         this.visualizer = visualizer;
         this.graph = graph;
+        this.timingReporter = timingReporter;
+        this.maxStepsPerSecond = Math.max(MIN_STEPS_PER_SECOND, maxStepsPerSecond);
 
         this.currentObservation = environment.reset();
         updateVisualizer();
@@ -82,6 +90,8 @@ public class EpisodeRunner extends BukkitRunnable {
             return;
         }
 
+        long tickStartNanos = timingReporter != null ? System.nanoTime() : 0L;
+
         if (resetCooldownTicks > 0) {
             resetCooldownTicks--;
             if (resetCooldownTicks == 0) {
@@ -89,6 +99,10 @@ public class EpisodeRunner extends BukkitRunnable {
                 currentEpisodeReward = 0.0;
                 stepsThisEpisode = 0;
                 teleportVisualizerToCurrent();
+            }
+            if (timingReporter != null) {
+                timingReporter.recordTick(System.nanoTime() - tickStartNanos);
+                timingReporter.maybeReport();
             }
             return;
         }
@@ -103,6 +117,10 @@ public class EpisodeRunner extends BukkitRunnable {
         int stepsToRun = (int) Math.floor(stepAccumulator);
         if (stepsToRun <= 0) {
             updateVisualizer();
+            if (timingReporter != null) {
+                timingReporter.recordTick(System.nanoTime() - tickStartNanos);
+                timingReporter.maybeReport();
+            }
             return;
         }
 
@@ -114,6 +132,8 @@ public class EpisodeRunner extends BukkitRunnable {
 
         for (int i = 0; i < stepsToRun; i++) {
             if (closed) break;
+
+            long stepStartNanos = timingReporter != null ? System.nanoTime() : 0L;
 
             Action action = policy.chooseAction(currentObservation);
             StepResult result = environment.step(action);
@@ -139,6 +159,10 @@ public class EpisodeRunner extends BukkitRunnable {
 
             currentObservation = result.getObservation();
 
+            if (timingReporter != null) {
+                timingReporter.recordStep(System.nanoTime() - stepStartNanos);
+            }
+
             if (result.isDone()) {
                 boolean success = finishEpisode(result);
                 policy.onEpisodeEnd();
@@ -150,10 +174,18 @@ public class EpisodeRunner extends BukkitRunnable {
             }
         }
         updateVisualizer();
+
+        if (timingReporter != null) {
+            timingReporter.recordTick(System.nanoTime() - tickStartNanos);
+            timingReporter.maybeReport();
+        }
     }
 
     private boolean finishEpisode(StepResult lastStep) {
         episodesCompleted++;
+        if (timingReporter != null) {
+            timingReporter.recordEpisode();
+        }
 
         boolean success = lastStep.getReward() > 0.0;
 
@@ -162,7 +194,7 @@ public class EpisodeRunner extends BukkitRunnable {
             totalStepsToGoal += stepsThisEpisode;
             if (stepsThisEpisode < bestStepsToGoal) bestStepsToGoal = stepsThisEpisode;
 
-            // ✅ obvious “hit” indicator
+            // Obvious hit indicator
             if (visualizer != null) {
                 visualizer.onGoalHit();
             }
@@ -216,6 +248,8 @@ public class EpisodeRunner extends BukkitRunnable {
 
         if (environment instanceof me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment env) {
             int y = env.getConfig().y() + 1;
+            visualizer.setAllowVerticalMovement(false);
+            visualizer.setBreakBlocks(false);
             visualizer.updatePosition(env.getAgentX(), y, env.getAgentZ());
         }
     }
@@ -230,6 +264,8 @@ public class EpisodeRunner extends BukkitRunnable {
 
         if (environment instanceof me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment env) {
             int y = env.getConfig().y() + 1;
+            visualizer.setAllowVerticalMovement(false);
+            visualizer.setBreakBlocks(false);
             visualizer.teleportTo(env.getAgentX(), y, env.getAgentZ());
         }
     }
@@ -253,13 +289,19 @@ public class EpisodeRunner extends BukkitRunnable {
         closed = true;
         cancel();
         logger.close();
+        if (timingReporter != null) timingReporter.close();
         if (visualizer != null) visualizer.destroy();
     }
 
-    public void setStepsPerSecond(double stepsPerSecond) {
-        if (stepsPerSecond < 0.1) stepsPerSecond = 0.1;   // 1 step every 10 seconds
-        if (stepsPerSecond > 2000) stepsPerSecond = 2000; // safety
+    public double setStepsPerSecond(double stepsPerSecond) {
+        if (stepsPerSecond < MIN_STEPS_PER_SECOND) stepsPerSecond = MIN_STEPS_PER_SECOND;   // 1 step every 10 seconds
+        if (stepsPerSecond > maxStepsPerSecond) stepsPerSecond = maxStepsPerSecond; // safety
         this.stepsPerSecond = stepsPerSecond;
+        return stepsPerSecond;
+    }
+
+    public double getMaxStepsPerSecond() {
+        return maxStepsPerSecond;
     }
 
     public double getStepsPerSecond() {

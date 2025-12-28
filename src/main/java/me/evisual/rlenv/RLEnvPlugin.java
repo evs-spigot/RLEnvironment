@@ -1,13 +1,18 @@
 package me.evisual.rlenv;
 
 import me.evisual.rlenv.command.RLEnvCommand;
-import me.evisual.rlenv.control.*;
+import me.evisual.rlenv.control.EpisodeRunner;
+import me.evisual.rlenv.control.EpisodeStats;
+import me.evisual.rlenv.control.Policy;
+import me.evisual.rlenv.control.QLearningPolicy;
 import me.evisual.rlenv.env.RLEnvironment;
 import me.evisual.rlenv.env.goldcollector.ArenaConfig;
 import me.evisual.rlenv.env.goldcollector.GoldCollectorEnvironment;
 import me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment;
+import me.evisual.rlenv.logging.TimingReporter;
 import me.evisual.rlenv.logging.TransitionLogger;
 import me.evisual.rlenv.progression.ProgressionManager;
+import me.evisual.rlenv.testing.StartupSelfTest;
 import me.evisual.rlenv.visual.AgentVisualizer;
 import me.evisual.rlenv.visual.ArenaVisualizer;
 import me.evisual.rlenv.visual.GraphMode;
@@ -26,12 +31,17 @@ public class RLEnvPlugin extends JavaPlugin {
     private TransitionLogger transitionLogger;
     private RLEnvironment environment;
     private ProgressGraphVisualizer graphVisualizer;
-    private boolean graphEnabled = true;
-
     private ProgressionManager progressionManager;
+    private boolean timingReportsEnabled = false;
+    private int timingReportIntervalSeconds = 10;
+    private double maxStepsPerSecond = EpisodeRunner.MIN_STEPS_PER_SECOND;
+    private boolean startupSelfTestsEnabled = false;
 
     @Override
     public void onEnable() {
+        saveDefaultConfig();
+        loadTimingSettings();
+        runStartupSelfTests();
         if (getCommand("rlenv") != null) {
             getCommand("rlenv").setExecutor(new RLEnvCommand(this));
         }
@@ -89,7 +99,7 @@ public class RLEnvPlugin extends JavaPlugin {
         File dataFolder = getDataFolder();
         transitionLogger = new TransitionLogger(dataFolder);
 
-        Policy policy = new QLearningPolicy(); // or RandomPolicy if you prefer
+        Policy policy = new QLearningPolicy();
         AgentVisualizer visualizer = new AgentVisualizer(this, arenaConfig);
 
         Location graphOrigin = new Location(
@@ -100,14 +110,16 @@ public class RLEnvPlugin extends JavaPlugin {
         );
 
         graphVisualizer = new ProgressGraphVisualizer(player, graphOrigin);
-        graphVisualizer.runTaskTimer(this, 0L, 10L); // redraw graph every 40 ticks
+        graphVisualizer.runTaskTimer(this, 0L, 10L); // redraw graph every 10 ticks
 
         episodeRunner = new EpisodeRunner(
                 environment,
                 transitionLogger,
                 policy,
                 visualizer,
-                graphVisualizer
+                graphVisualizer,
+                createTimingReporter(),
+                maxStepsPerSecond
         );
         episodeRunner.runTaskTimer(this, 0L, 1L);
 
@@ -137,10 +149,9 @@ public class RLEnvPlugin extends JavaPlugin {
         environment = null;
     }
 
-    public boolean setEnvironmentSpeed(double stepsPerSecond) {
-        if (episodeRunner == null) return false;
-        episodeRunner.setStepsPerSecond(stepsPerSecond);
-        return true;
+    public double setEnvironmentSpeed(double stepsPerSecond) {
+        if (episodeRunner == null) return -1.0;
+        return episodeRunner.setStepsPerSecond(stepsPerSecond);
     }
 
     public EpisodeStats getEpisodeStats() {
@@ -218,11 +229,55 @@ public class RLEnvPlugin extends JavaPlugin {
 
         AgentVisualizer visualizer = new AgentVisualizer(this, ((ProgressionGoldEnvironment) env).getConfig());
 
-        this.episodeRunner = new EpisodeRunner(environment, transitionLogger, policy, visualizer, graphVisualizer);
+        this.episodeRunner = new EpisodeRunner(
+                environment,
+                transitionLogger,
+                policy,
+                visualizer,
+                graphVisualizer,
+                createTimingReporter(),
+                maxStepsPerSecond
+        );
         this.episodeRunner.runTaskTimer(this, 0L, 1L);
     }
 
     public ProgressionManager getProgressionManager() {
         return progressionManager;
+    }
+
+    private void loadTimingSettings() {
+        timingReportsEnabled = getConfig().getBoolean("timing.enabled", false);
+        timingReportIntervalSeconds = getConfig().getInt("timing.report-interval-seconds", 10);
+        if (timingReportIntervalSeconds < 1) {
+            timingReportIntervalSeconds = 1;
+        }
+        maxStepsPerSecond = getConfig().getDouble("speed.max-steps-per-second", 2000.0);
+        if (maxStepsPerSecond < EpisodeRunner.MIN_STEPS_PER_SECOND) {
+            maxStepsPerSecond = EpisodeRunner.MIN_STEPS_PER_SECOND;
+        }
+        startupSelfTestsEnabled = getConfig().getBoolean("self-tests.enabled", false);
+    }
+
+    private TimingReporter createTimingReporter() {
+        if (!timingReportsEnabled) {
+            return null;
+        }
+        return new TimingReporter(getLogger(), getDataFolder(), timingReportIntervalSeconds);
+    }
+
+    private void runStartupSelfTests() {
+        if (!startupSelfTestsEnabled) {
+            return;
+        }
+        try {
+            StartupSelfTest.run();
+            getLogger().info("Startup self-tests passed.");
+        } catch (Exception e) {
+            getLogger().log(java.util.logging.Level.SEVERE, "Startup self-tests failed.", e);
+        }
+    }
+
+    public double getMaxStepsPerSecond() {
+        return maxStepsPerSecond;
     }
 }

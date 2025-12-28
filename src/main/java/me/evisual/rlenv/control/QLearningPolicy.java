@@ -10,6 +10,8 @@ import java.util.Random;
 
 public class QLearningPolicy implements Policy {
 
+    private static final Action[] ACTIONS = Action.values();
+
     private final Map<String, double[]> q = new HashMap<>();
     private final Random rng = new Random();
 
@@ -100,7 +102,7 @@ public class QLearningPolicy implements Policy {
         }
 
         int bestIdx = argMaxWithTies(qValues, observation);
-        return Action.values()[bestIdx];
+        return ACTIONS[bestIdx];
     }
 
     @Override
@@ -154,20 +156,12 @@ public class QLearningPolicy implements Policy {
         return q.size();
     }
 
-    public long getEpisodesSeen() {
-        return episodesSeen;
-    }
-
-    public int getStepIndexInEpisode() {
-        return stepIndexInEpisode;
-    }
-
     // -----------------------------
     // Internals
     // -----------------------------
 
     private double[] createInitialQ() {
-        double[] arr = new double[Action.values().length];
+        double[] arr = new double[ACTIONS.length];
         Arrays.fill(arr, optimisticInit);
         return arr;
     }
@@ -178,7 +172,7 @@ public class QLearningPolicy implements Policy {
 
         // Build a small list of allowed actions (no allocations: try a few times then fallback)
         for (int tries = 0; tries < 12; tries++) {
-            Action a = Action.values()[rng.nextInt(Action.values().length)];
+            Action a = ACTIONS[rng.nextInt(ACTIONS.length)];
             if (a == Action.STAY) return a; // always valid
             if (blocked == null) return a;
 
@@ -204,7 +198,7 @@ public class QLearningPolicy implements Policy {
         int ties = 0;
 
         for (int i = 0; i < arr.length; i++) {
-            Action a = Action.values()[i];
+            Action a = ACTIONS[i];
 
             if (blocked != null && isMoveBlocked(a, blocked)) {
                 continue;
@@ -234,7 +228,7 @@ public class QLearningPolicy implements Policy {
         boolean found = false;
 
         for (int i = 0; i < qValues.length; i++) {
-            Action a = Action.values()[i];
+            Action a = ACTIONS[i];
             if (blocked != null && isMoveBlocked(a, blocked)) continue;
 
             best = Math.max(best, qValues[i]);

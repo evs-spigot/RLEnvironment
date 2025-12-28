@@ -4,8 +4,6 @@ import me.evisual.rlenv.env.Action;
 import me.evisual.rlenv.env.Observation;
 
 import java.io.*;
-import java.util.Arrays;
-import java.util.stream.Collectors;
 
 public class TransitionLogger implements Closeable {
 
@@ -67,9 +65,15 @@ public class TransitionLogger implements Closeable {
     }
 
     private String joinArray(double[] arr) {
-        return Arrays.stream(arr)
-                .mapToObj(this::formatDouble)
-                .collect(Collectors.joining(";"));
+        if (arr.length == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(arr.length * 8);
+        sb.append(formatDouble(arr[0]));
+        for (int i = 1; i < arr.length; i++) {
+            sb.append(';').append(formatDouble(arr[i]));
+        }
+        return sb.toString();
     }
 
     private String formatDouble(double value) {

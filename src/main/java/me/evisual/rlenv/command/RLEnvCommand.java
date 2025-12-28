@@ -1,6 +1,7 @@
 package me.evisual.rlenv.command;
 
 import me.evisual.rlenv.RLEnvPlugin;
+import me.evisual.rlenv.control.EpisodeRunner;
 import me.evisual.rlenv.control.EpisodeStats;
 import me.evisual.rlenv.visual.GraphMode;
 import org.bukkit.ChatColor;
@@ -129,8 +130,13 @@ public class RLEnvCommand implements CommandExecutor {
             return;
         }
 
-        plugin.setEnvironmentSpeed(sps);
-        sender.sendMessage(ChatColor.GREEN + "Environment speed set to " + sps + " steps/sec.");
+        double applied = plugin.setEnvironmentSpeed(sps);
+        if (applied < 0.0) {
+            sender.sendMessage(ChatColor.RED + "Environment is not running.");
+            return;
+        }
+        String suffix = sps > plugin.getMaxStepsPerSecond() ? " (max)" : "";
+        sender.sendMessage(ChatColor.GREEN + "Environment speed set to " + applied + " steps/sec" + suffix + ".");
     }
 
     private void handleGraph(CommandSender sender, String[] args) {

@@ -1,0 +1,7 @@
+timing:
+  enabled: false
+  report-interval-seconds: 10
+speed:
+  max-steps-per-second: 2000.0
+self-tests:
+  enabled: false
