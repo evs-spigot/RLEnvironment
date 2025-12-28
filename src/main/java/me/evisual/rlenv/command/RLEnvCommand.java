@@ -1,7 +1,6 @@
 package me.evisual.rlenv.command;
 
 import me.evisual.rlenv.RLEnvPlugin;
-import me.evisual.rlenv.control.EpisodeRunner;
 import me.evisual.rlenv.control.EpisodeStats;
 import me.evisual.rlenv.visual.GraphMode;
 import org.bukkit.ChatColor;
@@ -34,6 +33,7 @@ public class RLEnvCommand implements CommandExecutor {
             case "speed" -> { handleSpeed(sender, args); return true; }
             case "graph" -> { handleGraph(sender, args); return true; }
             case "progression" -> { handleProgression(sender, args); return true; }
+            case "reload" -> { handleReload(sender); return true; }
             default -> { sendUsage(sender); return true; }
         }
     }
@@ -205,7 +205,12 @@ public class RLEnvCommand implements CommandExecutor {
         }
     }
 
+    private void handleReload(CommandSender sender) {
+        plugin.reloadSettings();
+        sender.sendMessage(ChatColor.GREEN + "RLEnv config reloaded.");
+    }
+
     private void sendUsage(CommandSender sender) {
-        sender.sendMessage(ChatColor.AQUA + "Usage: /rlenv <start|stop|status|showarena|speed|graph|progression>");
+        sender.sendMessage(ChatColor.AQUA + "Usage: /rlenv <start|stop|status|showarena|speed|graph|progression|reload>");
     }
 }

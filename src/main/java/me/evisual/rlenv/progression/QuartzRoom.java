@@ -5,8 +5,11 @@ import me.evisual.rlenv.world.TerrainSnapshot;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 
 public class QuartzRoom {
+
+    public static final int ROOM_HEIGHT = 10;
 
     private final ArenaConfig arena;
     private final TerrainSnapshot snapshot = new TerrainSnapshot();
@@ -20,19 +23,17 @@ public class QuartzRoom {
     }
 
     /**
-     * Builds a 10-block tall room around the arena bounds.
+     * Builds a room around the arena bounds.
      * Floor/ceiling/walls are QUARTZ_BLOCK except one wall of BARRIER.
-     *
-     * Barrier wall -- NORTH (minZ side).
      */
-    public void build() {
+    public void build(BlockFace barrierSide) {
         World w = arena.world();
         int minX = arena.minX();
         int maxX = arena.maxX();
         int minZ = arena.minZ();
         int maxZ = arena.maxZ();
         int baseY = arena.y();
-        int height = 10; // tall
+        int height = ROOM_HEIGHT;
 
         int y0 = baseY;
         int y1 = baseY + height - 1;
@@ -65,18 +66,20 @@ public class QuartzRoom {
         // Walls
         for (int y = y0 + 1; y <= y1 - 1; y++) {
             for (int x = wallMinX; x <= wallMaxX; x++) {
-                // NORTH wall (barrier)
-                set(w, x, y, wallMinZ, Material.BARRIER);
-                // SOUTH wall (quartz)
-                set(w, x, y, wallMaxZ, Material.QUARTZ_BLOCK);
+                Material north = barrierSide == BlockFace.NORTH ? Material.BARRIER : Material.QUARTZ_BLOCK;
+                Material south = barrierSide == BlockFace.SOUTH ? Material.BARRIER : Material.QUARTZ_BLOCK;
+                set(w, x, y, wallMinZ, north);
+                set(w, x, y, wallMaxZ, south);
             }
             for (int z = wallMinZ; z <= wallMaxZ; z++) {
-                // WEST / EAST walls (quartz)
-                set(w, wallMinX, y, z, Material.QUARTZ_BLOCK);
-                set(w, wallMaxX, y, z, Material.QUARTZ_BLOCK);
+                Material west = barrierSide == BlockFace.WEST ? Material.BARRIER : Material.QUARTZ_BLOCK;
+                Material east = barrierSide == BlockFace.EAST ? Material.BARRIER : Material.QUARTZ_BLOCK;
+                set(w, wallMinX, y, z, west);
+                set(w, wallMaxX, y, z, east);
             }
         }
     }
+
 
     private void set(World w, int x, int y, int z, Material m) {
         Block b = w.getBlockAt(x, y, z);

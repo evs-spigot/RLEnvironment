@@ -5,6 +5,7 @@ import me.evisual.rlenv.env.Observation;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 class QLearningPolicyTest {
 
@@ -25,5 +26,20 @@ class QLearningPolicyTest {
 
         policy.observeTransition(s1, Action.MOVE_EAST, 1.0, s2, false);
         policy.onEpisodeEnd();
+    }
+
+    @Test
+    void returnsStayWhenAllMovesBlocked() {
+        QLearningPolicy policy = new QLearningPolicy(
+                0.1, 0.9,
+                0.0, 0.0, 1,
+                0.0, 0.0,
+                0.0,
+                true,
+                -1.0, 1.0
+        );
+        Observation blockedObs = new Observation(new double[] { 0.0, 0.0, 0.0, 0.2, 1.0, 1.0, 1.0, 1.0 });
+        Action action = policy.chooseAction(blockedObs);
+        assertSame(Action.STAY, action);
     }
 }

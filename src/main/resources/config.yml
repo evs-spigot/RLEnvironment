@@ -5,3 +5,5 @@ speed:
   max-steps-per-second: 2000.0
 self-tests:
   enabled: false
+graph:
+  refresh-ticks: 5

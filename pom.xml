@@ -6,7 +6,7 @@
 
     <groupId>me.evisual</groupId>
     <artifactId>RLEnvironment</artifactId>
-    <version>1.0.0-DEVELOPMENT</version>
+    <version>1.1.0-DEVELOPMENT</version>
 
     <name>RL Environment Plugin</name>
     <description>A Spigot RL environment plugin</description>

@@ -1,6 +1,7 @@
 package me.evisual.rlenv;
 
 import me.evisual.rlenv.command.RLEnvCommand;
+import me.evisual.rlenv.command.RLEnvTabCompleter;
 import me.evisual.rlenv.control.EpisodeRunner;
 import me.evisual.rlenv.control.EpisodeStats;
 import me.evisual.rlenv.control.Policy;
@@ -36,6 +37,7 @@ public class RLEnvPlugin extends JavaPlugin {
     private int timingReportIntervalSeconds = 10;
     private double maxStepsPerSecond = EpisodeRunner.MIN_STEPS_PER_SECOND;
     private boolean startupSelfTestsEnabled = false;
+    private int graphRefreshTicks = 10;
 
     @Override
     public void onEnable() {
@@ -44,6 +46,7 @@ public class RLEnvPlugin extends JavaPlugin {
         runStartupSelfTests();
         if (getCommand("rlenv") != null) {
             getCommand("rlenv").setExecutor(new RLEnvCommand(this));
+            getCommand("rlenv").setTabCompleter(new RLEnvTabCompleter());
         }
         if (!getDataFolder().exists()) {
             getDataFolder().mkdirs();
@@ -76,7 +79,7 @@ public class RLEnvPlugin extends JavaPlugin {
 
         int centerX = player.getLocation().getBlockX();
         int centerZ = player.getLocation().getBlockZ();
-        int y = player.getLocation().getBlockY() + 1; // spawn agent on top of ground
+        int y = player.getLocation().getBlockY() - 1; // ground block level
 
         int halfSize = 5;
         int minX = centerX - halfSize;
@@ -102,15 +105,7 @@ public class RLEnvPlugin extends JavaPlugin {
         Policy policy = new QLearningPolicy();
         AgentVisualizer visualizer = new AgentVisualizer(this, arenaConfig);
 
-        Location graphOrigin = new Location(
-                arenaConfig.world(),
-                arenaConfig.maxX() + 2.0,
-                arenaConfig.y() + 2.0,
-                arenaConfig.minZ() + 0.0
-        );
-
-        graphVisualizer = new ProgressGraphVisualizer(player, graphOrigin);
-        graphVisualizer.runTaskTimer(this, 0L, 10L); // redraw graph every 10 ticks
+        graphVisualizer = createGraphVisualizer(player, arenaConfig);
 
         episodeRunner = new EpisodeRunner(
                 environment,
@@ -144,6 +139,9 @@ public class RLEnvPlugin extends JavaPlugin {
 
         if (environment instanceof GoldCollectorEnvironment env) {
             env.getTerrainSnapshot().restore(env.getConfig().world());
+        }
+        if (environment instanceof ProgressionGoldEnvironment env) {
+            env.cleanupGoal();
         }
 
         environment = null;
@@ -227,7 +225,9 @@ public class RLEnvPlugin extends JavaPlugin {
 
         this.transitionLogger = new TransitionLogger(getDataFolder());
 
-        AgentVisualizer visualizer = new AgentVisualizer(this, ((ProgressionGoldEnvironment) env).getConfig());
+        ArenaConfig arenaConfig = ((ProgressionGoldEnvironment) env).getConfig();
+        AgentVisualizer visualizer = new AgentVisualizer(this, arenaConfig);
+        graphVisualizer = createGraphVisualizer(player, arenaConfig);
 
         this.episodeRunner = new EpisodeRunner(
                 environment,
@@ -256,6 +256,10 @@ public class RLEnvPlugin extends JavaPlugin {
             maxStepsPerSecond = EpisodeRunner.MIN_STEPS_PER_SECOND;
         }
         startupSelfTestsEnabled = getConfig().getBoolean("self-tests.enabled", false);
+        graphRefreshTicks = getConfig().getInt("graph.refresh-ticks", 10);
+        if (graphRefreshTicks < 1) {
+            graphRefreshTicks = 1;
+        }
     }
 
     private TimingReporter createTimingReporter() {
@@ -263,6 +267,19 @@ public class RLEnvPlugin extends JavaPlugin {
             return null;
         }
         return new TimingReporter(getLogger(), getDataFolder(), timingReportIntervalSeconds);
+    }
+
+    private ProgressGraphVisualizer createGraphVisualizer(Player player, ArenaConfig arenaConfig) {
+        Location graphOrigin = new Location(
+                arenaConfig.world(),
+                arenaConfig.maxX() + 2.0,
+                arenaConfig.y() + 2.0,
+                arenaConfig.minZ()
+        );
+
+        ProgressGraphVisualizer visualizer = new ProgressGraphVisualizer(player, graphOrigin);
+        visualizer.runTaskTimer(this, 0L, graphRefreshTicks); // redraw graph every N ticks
+        return visualizer;
     }
 
     private void runStartupSelfTests() {
@@ -279,5 +296,14 @@ public class RLEnvPlugin extends JavaPlugin {
 
     public double getMaxStepsPerSecond() {
         return maxStepsPerSecond;
+    }
+
+    public void reloadSettings() {
+        reloadConfig();
+        loadTimingSettings();
+        if (graphVisualizer != null) {
+            graphVisualizer.cancel();
+            graphVisualizer.runTaskTimer(this, 0L, graphRefreshTicks);
+        }
     }
 }

@@ -6,7 +6,10 @@ import me.evisual.rlenv.control.QLearningPolicy;
 import me.evisual.rlenv.env.goldcollector.ArenaConfig;
 import me.evisual.rlenv.env.goldcollector.ProgressionGoldEnvironment;
 import me.evisual.rlenv.world.TerrainSnapshot;
+import org.bukkit.Location;
+import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Player;
+import org.bukkit.util.Vector;
 
 public class ProgressionManager {
 
@@ -38,6 +41,7 @@ public class ProgressionManager {
         stop(); // clean slate
 
         // Build arena around player (reuse your existing arena sizing logic)
+        Location startLoc = player.getLocation().clone();
         arenaConfig = plugin.createArenaConfigNearPlayer(player);
 
         // Pick a nice fixed spawn & goal inside the arena
@@ -47,8 +51,10 @@ public class ProgressionManager {
         goalZ = arenaConfig.maxZ() - 2;
 
         room = new QuartzRoom(arenaConfig);
-        room.build();
+        BlockFace barrierSide = computeBarrierSide(startLoc);
+        room.build(barrierSide);
         roomSnapshot = room.snapshot();
+        teleportPlayerInFront(player, startLoc);
 
         levelIndex = 0;
         policy = new QLearningPolicy();
@@ -108,5 +114,19 @@ public class ProgressionManager {
         }
         // Level 2: randomized goal
         return new ProgressionGoldEnvironment(arenaConfig, spawnX, spawnZ, true, goalX, goalZ);
+    }
+
+    private void teleportPlayerInFront(Player player, Location startLoc) {
+        Vector dir = startLoc.getDirection().setY(0).normalize();
+        Location loc = startLoc.clone().add(dir.multiply(2.0));
+        player.teleport(loc);
+    }
+
+    private BlockFace computeBarrierSide(Location loc) {
+        Vector dir = loc.getDirection().setY(0).normalize();
+        if (Math.abs(dir.getX()) > Math.abs(dir.getZ())) {
+            return dir.getX() >= 0 ? BlockFace.WEST : BlockFace.EAST;
+        }
+        return dir.getZ() >= 0 ? BlockFace.NORTH : BlockFace.SOUTH;
     }
 }

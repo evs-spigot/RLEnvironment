@@ -19,9 +19,11 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
 
     // In ROLLING mode we keep only a window
     private final LinkedList<Double> rolling = new LinkedList<>();
+    private final LinkedList<Double> epsRolling = new LinkedList<>();
 
     // In CONDENSE mode we keep the full history (bounded)
     private final ArrayList<Double> history = new ArrayList<>();
+    private final ArrayList<Double> epsHistory = new ArrayList<>();
 
     // Storage limits (to prevent unbounded growth in long runs)
     private final int rollingMaxPoints = 300;   // points stored for rolling
@@ -39,8 +41,7 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
     private final float particleSize = 0.45f;
     private boolean enabled = true;
 
-    private final double[] epsSeries = new double[512];
-    private int epsCount = 0;
+    private final double epsilonScale = 3.0;
 
     public ProgressGraphVisualizer(Player viewer, Location origin) {
         this.viewer = viewer;
@@ -77,12 +78,22 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
     }
 
     public void addEpsilonPoint(double eps) {
-        if (epsCount < epsSeries.length) {
-            epsSeries[epsCount++] = clamp01(eps);
+        double clamped = clamp01(eps);
+        if (mode == GraphMode.ROLLING) {
+            epsRolling.addLast(clamped);
+            while (epsRolling.size() > rollingMaxPoints) {
+                epsRolling.removeFirst();
+            }
         } else {
-            // rolling
-            System.arraycopy(epsSeries, 1, epsSeries, 0, epsSeries.length - 1);
-            epsSeries[epsSeries.length - 1] = clamp01(eps);
+            epsHistory.add(clamped);
+            if (epsHistory.size() > historyMaxPoints) {
+                ArrayList<Double> compressed = new ArrayList<>(historyMaxPoints / 2);
+                for (int i = 0; i < epsHistory.size(); i += 2) {
+                    compressed.add(epsHistory.get(i));
+                }
+                epsHistory.clear();
+                epsHistory.addAll(compressed);
+            }
         }
     }
 
@@ -106,6 +117,7 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
         }
 
         drawLine(selectSeriesToDraw());
+        drawEpsilonLine(selectEpsilonSeriesToDraw());
     }
 
     private List<Double> selectSeriesToDraw() {
@@ -113,6 +125,13 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
             return new ArrayList<>(rolling);
         }
         return history;
+    }
+
+    private List<Double> selectEpsilonSeriesToDraw() {
+        if (mode == GraphMode.ROLLING) {
+            return new ArrayList<>(epsRolling);
+        }
+        return epsHistory;
     }
 
     private void drawAxes() {
@@ -158,6 +177,57 @@ public class ProgressGraphVisualizer extends BukkitRunnable {
             );
 
             // short segment
+            if (prevPoint != null) {
+                int segSteps = 3;
+                for (int s = 1; s <= segSteps; s++) {
+                    double t = s / (double) segSteps;
+                    Location mid = prevPoint.clone().add(
+                            (point.getX() - prevPoint.getX()) * t,
+                            (point.getY() - prevPoint.getY()) * t,
+                            (point.getZ() - prevPoint.getZ()) * t
+                    );
+
+                    viewer.spawnParticle(
+                            Particle.REDSTONE,
+                            mid,
+                            1,
+                            0, 0, 0, 0,
+                            new Particle.DustOptions(color, particleSize)
+                    );
+                }
+            }
+
+            prevPoint = point;
+            drawnIndex++;
+            if (drawnIndex >= drawPoints) break;
+        }
+    }
+
+    private void drawEpsilonLine(List<Double> series) {
+        int n = series.size();
+        if (n < 2) return;
+
+        int step = Math.max(1, n / drawPoints);
+
+        Location prevPoint = null;
+        int drawnIndex = 0;
+
+        for (int i = 0; i < n; i += step) {
+            double v = series.get(i);
+            double y = clamp(v * epsilonScale, 0.0, heightClamp);
+
+            Location point = origin.clone().add(drawnIndex * xSpacing, y, 0);
+
+            Color color = Color.AQUA;
+
+            viewer.spawnParticle(
+                    Particle.REDSTONE,
+                    point,
+                    1,
+                    0, 0, 0, 0,
+                    new Particle.DustOptions(color, particleSize)
+            );
+
             if (prevPoint != null) {
                 int segSteps = 3;
                 for (int s = 1; s <= segSteps; s++) {

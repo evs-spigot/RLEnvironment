@@ -23,5 +23,19 @@ public final class StartupSelfTest {
         if (result.getObservation() == null) {
             throw new IllegalStateException("StepResult observation missing");
         }
+
+        Observation blockedObs = new Observation(new double[] { 0.0, 0.0, 0.0, 0.2, 1.0, 1.0, 1.0, 1.0 });
+        QLearningPolicy greedyPolicy = new QLearningPolicy(
+                0.1, 0.9,
+                0.0, 0.0, 1,
+                0.0, 0.0,
+                0.0,
+                true,
+                -1.0, 1.0
+        );
+        Action blockedAction = greedyPolicy.chooseAction(blockedObs);
+        if (blockedAction != Action.STAY) {
+            throw new IllegalStateException("Blocked action expected STAY but got " + blockedAction);
+        }
     }
 }
